@@ -59,6 +59,7 @@ class VisionExtraction(BaseModel):
     """Raw fields the model is actually qualified to report"""
     product_name: str
     category: Category
+    category_other_text: str | None = None
     packing_date_raw: str | None = Field(
         default=None, 
         description="Date of packing/MFG if printed separately (e.g., '24/07/2026')"
