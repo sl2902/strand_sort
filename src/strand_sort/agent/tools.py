@@ -54,3 +54,22 @@ def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
         "expiration_date": item_data.get("expiration_date"),
         "dietary_flags": item_data.get("dietary_flags", {}),
     }
+
+@tool
+def search_inventory(product_name: str) -> list[dict[str, Any]]:
+    """
+    Searches the food bank inventory for existing items matching a product name
+    """
+    repo = get_inventory_repository()
+    return repo.search_by_name(product_name)
+
+@tool
+def fetch_item_details(item_id: str) -> dict[str, Any]:
+    """
+    Fetches exact inventory details for a specific item using its item_id
+    """
+    repo = get_inventory_repository()
+    item = repo.get_by_id(item_id)
+    if not item:
+        return {"status": "error", "message": f"Item {item_id} not found."}
+    return {"status": "success", "item": item}
