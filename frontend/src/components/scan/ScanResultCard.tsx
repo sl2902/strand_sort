@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -13,6 +13,7 @@ import clsx from "clsx";
 import { Spinner } from "../Spinner";
 import { Badge } from "../Badge";
 import { DietaryBadgeRow } from "../DietaryBadges";
+import { ImageLightbox } from "../ImageLightbox";
 import { formatDate, expiryUrgency } from "../../lib/format";
 import { CATEGORY_LABELS, type DonationItem } from "../../lib/types";
 
@@ -83,16 +84,19 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
   // than showing a broken <img>/<video> — there's nothing to retry against.
   const [previewFailed, setPreviewFailed] = useState(false);
 
-  // Pending entries stay expanded (there's nothing to collapse — just the
-  // loading state) so a card starts expanded, then collapses itself the
-  // moment it settles into "done"/"error". Reloaded entries that were
-  // already settled in localStorage start collapsed from the first render.
+  // Set once, from whatever entry.status is at mount — deliberately NOT
+  // recomputed on every render/status change. A card that's open because
+  // it's still pending must stay open across the pending -> done/error
+  // transition, even if that happens while the user is away on another tab;
+  // otherwise the card appears to collapse "on its own" the moment they
+  // return, with no action from them to explain it. Entries that are already
+  // settled at mount time (e.g. reloaded from the store) start collapsed.
   const [isExpanded, setIsExpanded] = useState(entry.status === "pending");
-  useEffect(() => {
-    if (entry.status !== "pending") {
-      setIsExpanded(false);
-    }
-  }, [entry.status]);
+
+  // Only opened when there are real server-side images to show (see
+  // canEnlarge below) — a client-only blob preview isn't worth wiring
+  // through resolveImageUrl, which doesn't handle blob: URLs.
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const hasPreview = !!entry.previewUrl && !previewFailed;
 
@@ -113,7 +117,7 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
 
   if (entry.status === "error") {
     return (
-      <div className="relative rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 pr-9 shadow-soft animate-pop-in">
+      <div className="relative rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 pr-9 shadow-soft">
         <button
           type="button"
           onClick={() => setIsExpanded((v) => !v)}
@@ -139,9 +143,14 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
   const Icon = style.icon;
   const urgency = item ? expiryUrgency(item.expiration_date) : "unknown";
   const collapsedSubtitle = item?.product_name ?? entry.summary;
+  // The server's own images (extracted frames, for video too) are what's
+  // worth enlarging — the local blob preview is only ever a stand-in for
+  // those until they're available.
+  const enlargeableImages = item?.image_urls ?? [];
+  const canEnlarge = hasPreview && enlargeableImages.length > 0;
 
   return (
-    <div className={clsx("relative flex gap-3 rounded-2xl border px-4 py-3.5 pr-9 shadow-soft animate-pop-in", style.ring)}>
+    <div className={clsx("relative flex gap-3 rounded-2xl border px-4 py-3.5 pr-9 shadow-soft", style.ring)}>
       {hasPreview ? (
         entry.kind === "video" ? (
           <video
@@ -150,14 +159,22 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
             playsInline
             preload="metadata"
             onError={() => setPreviewFailed(true)}
-            className="h-14 w-14 shrink-0 rounded-xl border border-cream-300 object-cover"
+            onClick={canEnlarge ? () => setLightboxIndex(0) : undefined}
+            className={clsx(
+              "h-14 w-14 shrink-0 rounded-xl border border-cream-300 object-cover",
+              canEnlarge && "cursor-pointer"
+            )}
           />
         ) : (
           <img
             src={entry.previewUrl}
             alt=""
             onError={() => setPreviewFailed(true)}
-            className="h-14 w-14 shrink-0 rounded-xl object-cover border border-cream-300"
+            onClick={canEnlarge ? () => setLightboxIndex(0) : undefined}
+            className={clsx(
+              "h-14 w-14 shrink-0 rounded-xl object-cover border border-cream-300",
+              canEnlarge && "cursor-pointer"
+            )}
           />
         )
       ) : (
@@ -204,6 +221,16 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
       </button>
 
       <DeleteButton onDelete={onDelete} label={entry.label} />
+
+      {lightboxIndex !== null && enlargeableImages.length > 0 && (
+        <ImageLightbox
+          images={enlargeableImages}
+          index={lightboxIndex}
+          alt={item?.product_name ?? entry.label}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ function ItemCard({ item, onImageRetry }: { item: DonationItem; onImageRetry: ()
     >
       <ImageThumbnail
         url={item.image_urls[0]}
+        images={item.image_urls}
         alt={item.product_name}
         onRetry={onImageRetry}
         size="h-16 w-16 sm:h-20 sm:w-20"

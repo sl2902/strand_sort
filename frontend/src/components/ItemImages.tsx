@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { ImageOff, RefreshCw, Image as ImageIcon } from "lucide-react";
 import clsx from "clsx";
 import { resolveImageUrl } from "../lib/api";
+import { ImageLightbox } from "./ImageLightbox";
 
 /**
  * A single photo tile that knows how to fail gracefully. Presigned S3 URLs
@@ -14,11 +15,13 @@ function Thumb({
   url,
   alt,
   onRetry,
+  onClick,
   className,
 }: {
   url: string;
   alt: string;
   onRetry?: () => void;
+  onClick?: (e: MouseEvent) => void;
   className?: string;
 }) {
   const [hasError, setHasError] = useState(false);
@@ -53,11 +56,18 @@ function Thumb({
   }
 
   return (
-    <div className={clsx("relative overflow-hidden rounded-xl border border-cream-300 bg-cream-100", className)}>
+    <div
+      className={clsx(
+        "relative overflow-hidden rounded-xl border border-cream-300 bg-cream-100",
+        onClick && !isLoading && "cursor-pointer",
+        className
+      )}
+    >
       {isLoading && <div className="skeleton absolute inset-0" />}
       <img
         src={resolveImageUrl(url)}
         alt={alt}
+        onClick={!isLoading ? onClick : undefined}
         className={clsx("h-full w-full object-cover transition-opacity", isLoading ? "opacity-0" : "opacity-100")}
         onLoad={() => setIsLoading(false)}
         onError={() => {
@@ -75,12 +85,19 @@ export function ImageThumbnail({
   alt,
   onRetry,
   size = "h-16 w-16",
+  images,
 }: {
   url: string | undefined;
   alt: string;
   onRetry?: () => void;
   size?: string;
+  /** Full set to step through in the lightbox, if the caller has it (e.g. a
+   * list card showing only the first image but with the whole item on
+   * hand). Falls back to just `url` alone when omitted. */
+  images?: string[];
 }) {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
   if (!url) {
     return (
       <div className={clsx("flex shrink-0 items-center justify-center rounded-xl border border-cream-300 bg-cream-100 text-ink-700/30", size)}>
@@ -88,7 +105,33 @@ export function ImageThumbnail({
       </div>
     );
   }
-  return <Thumb url={url} alt={alt} onRetry={onRetry} className={clsx("shrink-0", size)} />;
+
+  const gallery = images && images.length > 0 ? images : [url];
+
+  return (
+    <>
+      <Thumb
+        url={url}
+        alt={alt}
+        onRetry={onRetry}
+        className={clsx("shrink-0", size)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setLightboxIndex(0);
+        }}
+      />
+      {lightboxIndex !== null && (
+        <ImageLightbox
+          images={gallery}
+          index={lightboxIndex}
+          alt={alt}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
+    </>
+  );
 }
 
 /** Horizontal strip of larger photos — item detail, review queue cards. */
@@ -101,6 +144,8 @@ export function ImageGallery({
   alt: string;
   onRetry?: () => void;
 }) {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
   if (urls.length === 0) {
     return (
       <div className="flex h-28 items-center justify-center gap-2 rounded-xl border border-dashed border-cream-300 bg-cream-100 text-xs text-ink-700/50">
@@ -111,16 +156,32 @@ export function ImageGallery({
   }
 
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1">
-      {urls.map((url, i) => (
-        <Thumb
-          key={`${url}-${i}`}
-          url={url}
-          alt={`${alt} ${i + 1}`}
-          onRetry={onRetry}
-          className="h-28 w-28 shrink-0 sm:h-36 sm:w-36"
+    <>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {urls.map((url, i) => (
+          <Thumb
+            key={`${url}-${i}`}
+            url={url}
+            alt={`${alt} ${i + 1}`}
+            onRetry={onRetry}
+            className="h-28 w-28 shrink-0 sm:h-36 sm:w-36"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setLightboxIndex(i);
+            }}
+          />
+        ))}
+      </div>
+      {lightboxIndex !== null && (
+        <ImageLightbox
+          images={urls}
+          index={lightboxIndex}
+          alt={alt}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
         />
-      ))}
-    </div>
+      )}
+    </>
   );
 }

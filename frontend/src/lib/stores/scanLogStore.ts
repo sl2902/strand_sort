@@ -11,7 +11,11 @@ const STORAGE_KEY = "strand-sort:scan-log-store";
 
 interface ScanLogState {
   entries: ScanLogEntry[];
-  addEntry: (entry: ScanLogEntry) => void;
+  /** Generates the entry's id and returns it, so the caller can address this
+   * same entry in a later updateEntry() call. Id generation lives here, not
+   * with callers — see the git history on this file for why a caller-owned
+   * counter is exactly the kind of thing that goes quietly wrong. */
+  addEntry: (entry: Omit<ScanLogEntry, "id">) => string;
   updateEntry: (id: string, patch: Partial<ScanLogEntry>) => void;
   deleteEntry: (id: string) => void;
   clear: () => void;
@@ -35,7 +39,20 @@ export const useScanLogStore = create<ScanLogState>()(
   persist(
     (set) => ({
       entries: [],
-      addEntry: (entry) => set((state) => ({ entries: [entry, ...state.entries] })),
+      addEntry: (entry) => {
+        // crypto.randomUUID() rather than an incrementing counter: a counter
+        // has to live somewhere outside this closure to survive across
+        // calls, and anywhere it lives (a module-level `let`, component
+        // state) is either reset by a Vite HMR reload of that module or a
+        // full page reload — while these persisted entries survive both.
+        // The very next id generated after such a reset collides with an
+        // existing entry's id, and updateEntry's id-matching update then
+        // (correctly, given the bad input) overwrites every entry sharing
+        // that id with whatever scan resolves next.
+        const id = `scan-${crypto.randomUUID()}`;
+        set((state) => ({ entries: [{ ...entry, id }, ...state.entries] }));
+        return id;
+      },
       updateEntry: (id, patch) =>
         set((state) => ({
           entries: state.entries.map((e) => (e.id === id ? { ...e, ...patch } : e)),

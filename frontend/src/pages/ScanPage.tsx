@@ -23,8 +23,6 @@ const VIDEO_MESSAGES = [
   "Cross-checking against existing stock…",
 ];
 
-let nextId = 1;
-
 export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
   const [mode, setMode] = useState<"photo" | "video">("photo");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -42,8 +40,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
     previewUrl: string | undefined,
     call: () => Promise<IntakeResponse>
   ) => {
-    const id = `scan-${nextId++}`;
-    addEntry({ id, kind, label, previewUrl, status: "pending" });
+    const id = addEntry({ kind, label, previewUrl, status: "pending" });
     try {
       const { summary, item } = await call();
       // Prefer the server's persistent URL over the local blob preview — the
@@ -140,7 +137,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
               Clear
             </button>
           </div>
-          <div className="max-h-[32rem] space-y-2.5 overflow-y-auto pr-1">
+          <div className="max-h-[32rem] space-y-2.5 overflow-y-auto overflow-x-hidden pr-1">
             {log.map((entry) => (
               <ScanResultCard key={entry.id} entry={entry} onDelete={() => deleteEntry(entry.id)} />
             ))}

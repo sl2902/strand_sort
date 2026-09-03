@@ -60,11 +60,6 @@ export default {
         lift: "0 12px 28px -8px rgba(51, 41, 33, 0.18)",
       },
       keyframes: {
-        "pop-in": {
-          "0%": { opacity: "0", transform: "scale(0.85)" },
-          "60%": { opacity: "1", transform: "scale(1.03)" },
-          "100%": { opacity: "1", transform: "scale(1)" },
-        },
         "fade-up": {
           "0%": { opacity: "0", transform: "translateY(8px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
@@ -84,7 +79,6 @@ export default {
         },
       },
       animation: {
-        "pop-in": "pop-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both",
         "fade-up": "fade-up 0.35s ease-out both",
         "fade-out-collapse": "fade-out-collapse 0.4s ease-in both",
         shimmer: "shimmer 1.6s linear infinite",
