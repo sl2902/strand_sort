@@ -1,14 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Camera, Video as VideoIcon, Trash2 } from "lucide-react";
 import clsx from "clsx";
 import { PhotoScanPanel } from "../components/scan/PhotoScanPanel";
 import { VideoScanPanel } from "../components/scan/VideoScanPanel";
-import { ScanResultCard, type ScanLogEntry } from "../components/scan/ScanResultCard";
+import { ScanResultCard } from "../components/scan/ScanResultCard";
 import { ScanProgress } from "../components/Spinner";
 import { intakeImage, intakeVideo, resolveImageUrl, ApiError } from "../lib/api";
 import type { IntakeResponse } from "../lib/types";
 import { useToast } from "../components/Toast";
-import { loadScanLog, saveScanLog, patchScanLogEntry } from "../lib/scanLog";
+import { useScanLogStore } from "../lib/stores/scanLogStore";
 
 const PHOTO_MESSAGES = [
   "Reading the label…",
@@ -27,17 +27,14 @@ let nextId = 1;
 
 export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
   const [mode, setMode] = useState<"photo" | "video">("photo");
-  const [log, setLog] = useState<ScanLogEntry[]>(() => loadScanLog());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { show } = useToast();
 
-  useEffect(() => {
-    saveScanLog(log);
-  }, [log]);
-
-  const handleDeleteEntry = (id: string) => {
-    setLog((prev) => prev.filter((e) => e.id !== id));
-  };
+  const log = useScanLogStore((s) => s.entries);
+  const addEntry = useScanLogStore((s) => s.addEntry);
+  const updateEntry = useScanLogStore((s) => s.updateEntry);
+  const deleteEntry = useScanLogStore((s) => s.deleteEntry);
+  const clearLog = useScanLogStore((s) => s.clear);
 
   const runScan = async (
     kind: "photo" | "video",
@@ -46,33 +43,28 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
     call: () => Promise<IntakeResponse>
   ) => {
     const id = `scan-${nextId++}`;
-    setLog((prev) => [{ id, kind, label, previewUrl, status: "pending" }, ...prev]);
+    addEntry({ id, kind, label, previewUrl, status: "pending" });
     try {
       const { summary, item } = await call();
       // Prefer the server's persistent URL over the local blob preview — the
-      // blob doesn't survive a page reload (see scanLog persistence), but a
-      // real image_urls entry does.
+      // blob doesn't survive a page reload, but a real image_urls entry does.
       const persistentPreviewUrl = item?.image_urls[0] ? resolveImageUrl(item.image_urls[0]) : undefined;
       if (persistentPreviewUrl && previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
-      const patch: Partial<ScanLogEntry> = {
+      // updateEntry is a store action, not component state — it updates the
+      // shared store (and persists) whether or not this component is still
+      // mounted by the time this promise resolves, and reactively re-renders
+      // anything subscribed (e.g. this same card, live) when it is.
+      updateEntry(id, {
         status: "done",
         summary,
         item,
         ...(persistentPreviewUrl ? { previewUrl: persistentPreviewUrl } : {}),
-      };
-      // The scan keeps running server-side even if the user navigates away
-      // from this page before it resolves — setLog alone would land on an
-      // unmounted component and silently no-op, stranding the entry at
-      // "pending" forever. Write straight to localStorage so it's durable
-      // regardless of whether ScanPage is still mounted when this fires.
-      patchScanLogEntry(id, patch);
-      setLog((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+      });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Something went wrong during the scan.";
-      patchScanLogEntry(id, { status: "error", errorText: message });
-      setLog((prev) => prev.map((e) => (e.id === id ? { ...e, status: "error", errorText: message } : e)));
+      updateEntry(id, { status: "error", errorText: message });
       show(message, "error");
     } finally {
       onScanComplete();
@@ -141,7 +133,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-700/60">This session</h2>
             <button
-              onClick={() => setLog([])}
+              onClick={clearLog}
               className="flex items-center gap-1 text-xs font-medium text-ink-700/50 hover:text-ink-900"
             >
               <Trash2 size={13} />
@@ -150,7 +142,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
           </div>
           <div className="max-h-[32rem] space-y-2.5 overflow-y-auto pr-1">
             {log.map((entry) => (
-              <ScanResultCard key={entry.id} entry={entry} onDelete={() => handleDeleteEntry(entry.id)} />
+              <ScanResultCard key={entry.id} entry={entry} onDelete={() => deleteEntry(entry.id)} />
             ))}
           </div>
         </div>
