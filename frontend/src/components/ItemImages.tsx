@@ -1,0 +1,126 @@
+import { useEffect, useState } from "react";
+import { ImageOff, RefreshCw, Image as ImageIcon } from "lucide-react";
+import clsx from "clsx";
+import { resolveImageUrl } from "../lib/api";
+
+/**
+ * A single photo tile that knows how to fail gracefully. Presigned S3 URLs
+ * expire — if an item's detail was fetched a while ago and the image 404s
+ * now, we don't want a broken-image icon; we want a placeholder with a way
+ * to fetch a freshly generated URL (the backend regenerates one on every
+ * read, so re-fetching the item is all `onRetry` needs to do).
+ */
+function Thumb({
+  url,
+  alt,
+  onRetry,
+  className,
+}: {
+  url: string;
+  alt: string;
+  onRetry?: () => void;
+  className?: string;
+}) {
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    setHasError(false);
+    setIsLoading(true);
+  }, [url]);
+
+  if (hasError) {
+    return (
+      <div
+        className={clsx(
+          "flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-cream-300 bg-cream-100 px-2 text-center text-ink-700/50",
+          className
+        )}
+      >
+        <ImageOff size={18} />
+        <span className="text-[10px] leading-tight">Photo unavailable</span>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="flex items-center gap-1 text-[11px] font-medium text-terracotta-600 hover:text-terracotta-700"
+          >
+            <RefreshCw size={10} />
+            Refresh
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={clsx("relative overflow-hidden rounded-xl border border-cream-300 bg-cream-100", className)}>
+      {isLoading && <div className="skeleton absolute inset-0" />}
+      <img
+        src={resolveImageUrl(url)}
+        alt={alt}
+        className={clsx("h-full w-full object-cover transition-opacity", isLoading ? "opacity-0" : "opacity-100")}
+        onLoad={() => setIsLoading(false)}
+        onError={() => {
+          setIsLoading(false);
+          setHasError(true);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Small square thumbnail — inventory list rows, scan result cards. */
+export function ImageThumbnail({
+  url,
+  alt,
+  onRetry,
+  size = "h-16 w-16",
+}: {
+  url: string | undefined;
+  alt: string;
+  onRetry?: () => void;
+  size?: string;
+}) {
+  if (!url) {
+    return (
+      <div className={clsx("flex shrink-0 items-center justify-center rounded-xl border border-cream-300 bg-cream-100 text-ink-700/30", size)}>
+        <ImageIcon size={18} />
+      </div>
+    );
+  }
+  return <Thumb url={url} alt={alt} onRetry={onRetry} className={clsx("shrink-0", size)} />;
+}
+
+/** Horizontal strip of larger photos — item detail, review queue cards. */
+export function ImageGallery({
+  urls,
+  alt,
+  onRetry,
+}: {
+  urls: string[];
+  alt: string;
+  onRetry?: () => void;
+}) {
+  if (urls.length === 0) {
+    return (
+      <div className="flex h-28 items-center justify-center gap-2 rounded-xl border border-dashed border-cream-300 bg-cream-100 text-xs text-ink-700/50">
+        <ImageIcon size={16} />
+        No photo captured
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      {urls.map((url, i) => (
+        <Thumb
+          key={`${url}-${i}`}
+          url={url}
+          alt={`${alt} ${i + 1}`}
+          onRetry={onRetry}
+          className="h-28 w-28 shrink-0 sm:h-36 sm:w-36"
+        />
+      ))}
+    </div>
+  );
+}
