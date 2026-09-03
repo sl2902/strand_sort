@@ -8,7 +8,7 @@ import { ScanProgress } from "../components/Spinner";
 import { intakeImage, intakeVideo, resolveImageUrl, ApiError } from "../lib/api";
 import type { IntakeResponse } from "../lib/types";
 import { useToast } from "../components/Toast";
-import { loadScanLog, saveScanLog } from "../lib/scanLog";
+import { loadScanLog, saveScanLog, patchScanLogEntry } from "../lib/scanLog";
 
 const PHOTO_MESSAGES = [
   "Reading the label…",
@@ -56,21 +56,22 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
       if (persistentPreviewUrl && previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
-      setLog((prev) =>
-        prev.map((e) =>
-          e.id === id
-            ? {
-                ...e,
-                status: "done",
-                summary,
-                item,
-                previewUrl: persistentPreviewUrl ?? e.previewUrl,
-              }
-            : e
-        )
-      );
+      const patch: Partial<ScanLogEntry> = {
+        status: "done",
+        summary,
+        item,
+        ...(persistentPreviewUrl ? { previewUrl: persistentPreviewUrl } : {}),
+      };
+      // The scan keeps running server-side even if the user navigates away
+      // from this page before it resolves — setLog alone would land on an
+      // unmounted component and silently no-op, stranding the entry at
+      // "pending" forever. Write straight to localStorage so it's durable
+      // regardless of whether ScanPage is still mounted when this fires.
+      patchScanLogEntry(id, patch);
+      setLog((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Something went wrong during the scan.";
+      patchScanLogEntry(id, { status: "error", errorText: message });
       setLog((prev) => prev.map((e) => (e.id === id ? { ...e, status: "error", errorText: message } : e)));
       show(message, "error");
     } finally {
@@ -147,7 +148,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
               Clear
             </button>
           </div>
-          <div className="space-y-2.5">
+          <div className="max-h-[32rem] space-y-2.5 overflow-y-auto pr-1">
             {log.map((entry) => (
               <ScanResultCard key={entry.id} entry={entry} onDelete={() => handleDeleteEntry(entry.id)} />
             ))}

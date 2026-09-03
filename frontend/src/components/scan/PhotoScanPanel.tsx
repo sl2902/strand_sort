@@ -63,7 +63,7 @@ export function PhotoScanPanel({
           <ImagePlus size={22} />
         </div>
         <p className="text-sm font-medium text-ink-800">Drop photos here, or tap to browse</p>
-        <p className="text-xs text-ink-700/60">Each photo is scanned as its own item — batch as many as you like</p>
+        <p className="text-xs text-ink-700/60">Add a few angles of the same item for a more accurate read</p>
         <input
           ref={inputRef}
           type="file"
@@ -108,7 +108,7 @@ export function PhotoScanPanel({
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-terracotta-500 px-5 py-3 text-sm font-semibold text-cream-50 shadow-soft transition-colors hover:bg-terracotta-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             <ScanLine size={16} />
-            Scan {staged.length} item{staged.length === 1 ? "" : "s"}
+            {staged.length === 1 ? "Scan item" : `Scan item (${staged.length} photos)`}
           </button>
         </div>
       )}

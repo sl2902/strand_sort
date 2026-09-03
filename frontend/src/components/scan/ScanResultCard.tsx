@@ -1,5 +1,14 @@
-import { useState } from "react";
-import { CheckCircle2, AlertTriangle, HelpCircle, XCircle, Image as ImageIcon, Video, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  HelpCircle,
+  XCircle,
+  Image as ImageIcon,
+  Video,
+  Trash2,
+  ChevronDown,
+} from "lucide-react";
 import clsx from "clsx";
 import { Spinner } from "../Spinner";
 import { Badge } from "../Badge";
@@ -56,6 +65,15 @@ function DeleteButton({ onDelete, label }: { onDelete: () => void; label: string
   );
 }
 
+function ToggleChevron({ expanded }: { expanded: boolean }) {
+  return (
+    <ChevronDown
+      size={15}
+      className={clsx("ml-auto shrink-0 text-ink-700/40 transition-transform", expanded && "rotate-180")}
+    />
+  );
+}
+
 export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDelete: () => void }) {
   // previewUrl starts as a URL.createObjectURL(...) blob reference, which only
   // survives the page session that created it — ScanPage swaps it for a real
@@ -64,6 +82,18 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
   // swap happened) can still be dead blob refs. Fall back gracefully rather
   // than showing a broken <img>/<video> — there's nothing to retry against.
   const [previewFailed, setPreviewFailed] = useState(false);
+
+  // Pending entries stay expanded (there's nothing to collapse — just the
+  // loading state) so a card starts expanded, then collapses itself the
+  // moment it settles into "done"/"error". Reloaded entries that were
+  // already settled in localStorage start collapsed from the first render.
+  const [isExpanded, setIsExpanded] = useState(entry.status === "pending");
+  useEffect(() => {
+    if (entry.status !== "pending") {
+      setIsExpanded(false);
+    }
+  }, [entry.status]);
+
   const hasPreview = !!entry.previewUrl && !previewFailed;
 
   if (entry.status === "pending") {
@@ -83,12 +113,20 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
 
   if (entry.status === "error") {
     return (
-      <div className="relative flex items-start gap-3 rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 pr-9 shadow-soft animate-pop-in">
-        <XCircle size={20} className="mt-0.5 shrink-0 text-danger-600" />
-        <div>
-          <p className="text-sm font-semibold text-danger-600">Couldn't scan {entry.label}</p>
-          <p className="mt-0.5 text-sm text-ink-800/80">{entry.errorText}</p>
-        </div>
+      <div className="relative rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 pr-9 shadow-soft animate-pop-in">
+        <button
+          type="button"
+          onClick={() => setIsExpanded((v) => !v)}
+          className="flex w-full items-start gap-3 text-left"
+        >
+          <XCircle size={20} className="mt-0.5 shrink-0 text-danger-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-danger-600">Couldn't scan {entry.label}</p>
+            {!isExpanded && <p className="truncate text-xs text-ink-800/60">{entry.errorText}</p>}
+          </div>
+          <ToggleChevron expanded={isExpanded} />
+        </button>
+        {isExpanded && <p className="mt-1.5 pl-8 text-sm text-ink-800/80">{entry.errorText}</p>}
         <DeleteButton onDelete={onDelete} label={entry.label} />
       </div>
     );
@@ -100,6 +138,7 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
   const style = outcomeStyles[outcome];
   const Icon = style.icon;
   const urgency = item ? expiryUrgency(item.expiration_date) : "unknown";
+  const collapsedSubtitle = item?.product_name ?? entry.summary;
 
   return (
     <div className={clsx("relative flex gap-3 rounded-2xl border px-4 py-3.5 pr-9 shadow-soft animate-pop-in", style.ring)}>
@@ -127,31 +166,43 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
           {previewFailed && <span className="text-[8px] leading-none">expired</span>}
         </div>
       )}
-      <div className="min-w-0 flex-1">
+
+      <button
+        type="button"
+        onClick={() => setIsExpanded((v) => !v)}
+        className="min-w-0 flex-1 text-left"
+      >
         <div className="flex items-center gap-1.5">
           <Icon size={16} className={clsx("shrink-0", style.iconClass)} />
           <p className={clsx("text-sm font-semibold", style.iconClass)}>{style.heading}</p>
+          <ToggleChevron expanded={isExpanded} />
         </div>
 
-        {item ? (
-          <div className="mt-1.5 space-y-1.5">
-            <p className="font-display text-sm font-semibold leading-snug text-ink-900">{item.product_name}</p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Badge tone="neutral">{CATEGORY_LABELS[item.category]}</Badge>
-              <Badge tone={urgency === "expired" ? "danger" : urgency === "soon" ? "saffron" : "neutral"}>
-                {urgency === "expired" ? "Expired" : "Expires"} {formatDate(item.expiration_date)}
-              </Badge>
-              <Badge tone="neutral">×{item.quantity}</Badge>
-            </div>
-            {item.requires_human_review && item.review_reason && (
-              <p className="text-xs text-saffron-700">{item.review_reason}</p>
-            )}
-            <DietaryBadgeRow flags={item.dietary_flags} />
-          </div>
-        ) : (
-          <p className="mt-1 whitespace-pre-wrap text-sm leading-snug text-ink-800/90">{entry.summary}</p>
+        {!isExpanded && collapsedSubtitle && (
+          <p className="mt-0.5 truncate text-sm text-ink-800/80">{collapsedSubtitle}</p>
         )}
-      </div>
+
+        {isExpanded &&
+          (item ? (
+            <div className="mt-1.5 space-y-1.5">
+              <p className="font-display text-sm font-semibold leading-snug text-ink-900">{item.product_name}</p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge tone="neutral">{CATEGORY_LABELS[item.category]}</Badge>
+                <Badge tone={urgency === "expired" ? "danger" : urgency === "soon" ? "saffron" : "neutral"}>
+                  {urgency === "expired" ? "Expired" : "Expires"} {formatDate(item.expiration_date)}
+                </Badge>
+                <Badge tone="neutral">×{item.quantity}</Badge>
+              </div>
+              {item.requires_human_review && item.review_reason && (
+                <p className="text-xs text-saffron-700">{item.review_reason}</p>
+              )}
+              <DietaryBadgeRow flags={item.dietary_flags} />
+            </div>
+          ) : (
+            <p className="mt-1 whitespace-pre-wrap text-sm leading-snug text-ink-800/90">{entry.summary}</p>
+          ))}
+      </button>
+
       <DeleteButton onDelete={onDelete} label={entry.label} />
     </div>
   );
