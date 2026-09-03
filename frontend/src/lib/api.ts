@@ -44,9 +44,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ---- Intake ----
 
-export function intakeImage(file: File | Blob, filename = "photo.jpg"): Promise<IntakeResponse> {
+export function intakeImage(files: File[] | Blob[], filenamePrefix = "photo"): Promise<IntakeResponse> {
   const form = new FormData();
-  form.append("file", file, filename);
+  files.forEach((file, i) => {
+    const name = file instanceof File ? file.name : `${filenamePrefix}-${i}.jpg`;
+    form.append("files", file, name);
+  });
   return request<IntakeResponse>("/intake", { method: "POST", body: form });
 }
 

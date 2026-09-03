@@ -24,21 +24,6 @@ export function daysUntil(iso: string | null | undefined): number | null {
   return Math.ceil((parsed.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 }
 
-export type ScanOutcome = "committed" | "flagged" | "unknown";
-
-/**
- * /intake and /intake/video only return the agent's free-text summary — there's
- * no structured "status" field in the API contract. This is a light heuristic
- * over that text purely to pick an icon/tone; the summary text itself (shown
- * alongside) is always the source of truth for the volunteer.
- */
-export function classifyScanResult(text: string): ScanOutcome {
-  const lower = text.toLowerCase();
-  if (/(flag|review)/.test(lower)) return "flagged";
-  if (/(committ|regist|added|updated)/.test(lower)) return "committed";
-  return "unknown";
-}
-
 export function titleCase(s: string): string {
   return s
     .split(/[_\s]+/)

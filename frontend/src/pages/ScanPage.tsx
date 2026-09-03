@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Camera, Video as VideoIcon, Trash2 } from "lucide-react";
 import clsx from "clsx";
 import { PhotoScanPanel } from "../components/scan/PhotoScanPanel";
 import { VideoScanPanel } from "../components/scan/VideoScanPanel";
 import { ScanResultCard, type ScanLogEntry } from "../components/scan/ScanResultCard";
 import { ScanProgress } from "../components/Spinner";
-import { intakeImage, intakeVideo, ApiError } from "../lib/api";
+import { intakeImage, intakeVideo, resolveImageUrl, ApiError } from "../lib/api";
+import type { IntakeResponse } from "../lib/types";
 import { useToast } from "../components/Toast";
+import { loadScanLog, saveScanLog } from "../lib/scanLog";
 
 const PHOTO_MESSAGES = [
   "Reading the label…",
@@ -25,21 +27,48 @@ let nextId = 1;
 
 export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
   const [mode, setMode] = useState<"photo" | "video">("photo");
-  const [log, setLog] = useState<ScanLogEntry[]>([]);
+  const [log, setLog] = useState<ScanLogEntry[]>(() => loadScanLog());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { show } = useToast();
+
+  useEffect(() => {
+    saveScanLog(log);
+  }, [log]);
+
+  const handleDeleteEntry = (id: string) => {
+    setLog((prev) => prev.filter((e) => e.id !== id));
+  };
 
   const runScan = async (
     kind: "photo" | "video",
     label: string,
     previewUrl: string | undefined,
-    call: () => Promise<{ result: string }>
+    call: () => Promise<IntakeResponse>
   ) => {
     const id = `scan-${nextId++}`;
     setLog((prev) => [{ id, kind, label, previewUrl, status: "pending" }, ...prev]);
     try {
-      const { result } = await call();
-      setLog((prev) => prev.map((e) => (e.id === id ? { ...e, status: "done", resultText: result } : e)));
+      const { summary, item } = await call();
+      // Prefer the server's persistent URL over the local blob preview — the
+      // blob doesn't survive a page reload (see scanLog persistence), but a
+      // real image_urls entry does.
+      const persistentPreviewUrl = item?.image_urls[0] ? resolveImageUrl(item.image_urls[0]) : undefined;
+      if (persistentPreviewUrl && previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setLog((prev) =>
+        prev.map((e) =>
+          e.id === id
+            ? {
+                ...e,
+                status: "done",
+                summary,
+                item,
+                previewUrl: persistentPreviewUrl ?? e.previewUrl,
+              }
+            : e
+        )
+      );
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Something went wrong during the scan.";
       setLog((prev) => prev.map((e) => (e.id === id ? { ...e, status: "error", errorText: message } : e)));
@@ -51,10 +80,9 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
 
   const handlePhotoSubmit = async (files: File[]) => {
     setIsSubmitting(true);
-    for (const file of files) {
-      const previewUrl = URL.createObjectURL(file);
-      await runScan("photo", file.name, previewUrl, () => intakeImage(file, file.name));
-    }
+    const previewUrl = URL.createObjectURL(files[0]);
+    const label = files.length === 1 ? files[0].name : `${files.length} photos`;
+    await runScan("photo", label, previewUrl, () => intakeImage(files));
     setIsSubmitting(false);
   };
 
@@ -121,7 +149,7 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
           </div>
           <div className="space-y-2.5">
             {log.map((entry) => (
-              <ScanResultCard key={entry.id} entry={entry} />
+              <ScanResultCard key={entry.id} entry={entry} onDelete={() => handleDeleteEntry(entry.id)} />
             ))}
           </div>
         </div>

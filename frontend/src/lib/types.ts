@@ -87,7 +87,10 @@ export interface DonationItem {
 }
 
 export interface IntakeResponse {
-  result: string;
+  summary: string;
+  /** Null when the run never reached a settled outcome (e.g. a hard failure
+   * before extraction completed) — the backend doesn't fabricate one. */
+  item: DonationItem | null;
 }
 
 export interface ReviewResolutionRequest {
