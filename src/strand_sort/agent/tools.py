@@ -7,6 +7,8 @@ from strand_sort.models import DonationItem
 from strand_sort.vision.extract import get_extractor
 from strand_sort.agent.queue import review_queue
 from strand_sort.db.repository import get_inventory_repository
+from strand_sort.vision.extract import generate_idempotency_key
+from strand_sort.storage.image_storage import get_image_storage
 
 
 def _encode_image(path: str) -> str:
@@ -21,7 +23,10 @@ def scan_package_batch(image_paths: list[str]) -> dict[str, Any]:
     """
     images_base64 = [_encode_image(p) for p in image_paths]
     item: DonationItem = get_extractor(images_base64)
-    
+
+    storage = get_image_storage()
+    item.image_urls = storage.save_images(item.item_id, image_paths)
+
     if item.requires_human_review:
         review_queue.add_for_review(item)
         return {
@@ -30,6 +35,7 @@ def scan_package_batch(image_paths: list[str]) -> dict[str, Any]:
             "product_name": item.product_name,
             "reason": item.review_reason,
             "needs_review": True,
+            "item": item.model_dump(),
         }
 
     return {
@@ -42,17 +48,58 @@ def scan_package_batch(image_paths: list[str]) -> dict[str, Any]:
 @tool
 def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
     """
-    Persists a verified, non-expired DonationItem into the food bank inventory
+    Checks for idempotency and duplicate items before committing a verified item to inventory
     """
     repo = get_inventory_repository()
+
+    product_name = item_data.get("product_name", "").strip()
+    expiration_date = str(item_data.get("expiration_date", "")).strip()
+    incoming_qty = int(item_data.get("quantity", 1))
+
+    # Compute idempotency hash and bind top-level attributes
+    idempotency_key = generate_idempotency_key(product_name, expiration_date)
+    item_data["idempotency_key"] = idempotency_key
+    item_data["expiration_date"] = expiration_date  # Ensure normalized string presence
+    item_data["quantity"] = incoming_qty
+
+    # Check for existing batch in active stock
+    existing_item = repo.check_duplicate_active_inventory(product_name, expiration_date)
+    if existing_item:
+        updated_item = repo.increment_quantity(
+            item_id=existing_item["item_id"],
+            additional_qty=incoming_qty,
+            image_urls=item_data.get("image_urls"),
+        )
+        # A successful commit always supersedes any pending review flag for
+        # this item_id — e.g. a retried agent run can flag it on one attempt
+        # and commit it on another (see ExceptionReviewQueue.discard).
+        review_queue.discard(existing_item["item_id"])
+        return {
+            "status": "quantity_updated",
+            "action": "incremented_existing_batch",
+            "item_id": existing_item["item_id"],
+            "product_name": product_name,
+            "expiration_date": expiration_date,
+            "added_quantity": incoming_qty,
+            "total_quantity": updated_item.get("quantity", existing_item.get("quantity", 1) + incoming_qty),
+            "image_urls": updated_item.get("image_urls", []),
+            "item": updated_item,
+            "message": f"Added {incoming_qty} unit(s) to existing stock of '{product_name}' (Expires: {expiration_date})."
+        }
+
+    # Persist new batch if no match exists
     repo.save_item(item_data)
+    review_queue.discard(item_data.get("item_id"))
 
     return {
         "status": "committed",
+        "action": "created_new_batch",
         "item_id": item_data.get("item_id"),
-        "product_name": item_data.get("product_name"),
-        "expiration_date": item_data.get("expiration_date"),
-        "dietary_flags": item_data.get("dietary_flags", {}),
+        "product_name": product_name,
+        "expiration_date": expiration_date,
+        "quantity": incoming_qty,
+        "item": item_data,
+        "message": f"Registered new batch of {incoming_qty} x '{product_name}' (Expires: {expiration_date}) to inventory."
     }
 
 @tool
@@ -73,3 +120,50 @@ def fetch_item_details(item_id: str) -> dict[str, Any]:
     if not item:
         return {"status": "error", "message": f"Item {item_id} not found."}
     return {"status": "success", "item": item}
+
+@tool
+def checkout_from_inventory(item_id: str, quantity_to_remove: int = 1) -> dict[str, Any]:
+    """
+    Decrements stock quantity when items are distributed or removed from the food bank
+    
+    Args:
+        item_id: The unique identifier of the batch/item in inventory
+        quantity_to_remove: The number of units being distributed (default 1)
+    """
+    if quantity_to_remove <= 0:
+        return {
+            "status": "error",
+            "message": "Quantity to remove must be greater than zero."
+        }
+
+    repo = get_inventory_repository()
+
+    try:
+        updated_item = repo.decrement_quantity(item_id, quantity_to_remove)
+        remaining_qty = updated_item.get("quantity", 0)
+
+        if remaining_qty == 0:
+            return {
+                "status": "depleted",
+                "item_id": item_id,
+                "product_name": updated_item.get("product_name"),
+                "removed_quantity": quantity_to_remove,
+                "remaining_quantity": 0,
+                "message": f"Successfully checked out {quantity_to_remove} unit(s). Batch is now completely depleted."
+            }
+
+        return {
+            "status": "success",
+            "item_id": item_id,
+            "product_name": updated_item.get("product_name"),
+            "removed_quantity": quantity_to_remove,
+            "remaining_quantity": remaining_qty,
+            "message": f"Successfully checked out {quantity_to_remove} unit(s). {remaining_qty} unit(s) remaining in stock."
+        }
+
+    except ValueError as e:
+        return {
+            "status": "error",
+            "item_id": item_id,
+            "message": str(e)
+        }

@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     sqlite_db_path: str = "data/inventory.db"
     dynamodb_table_name: str = "foodbank_inventory"
 
+    storage_backend: Literal["local", "s3"] = "local"
+    image_storage_local_path: str = "data/raw"
+    s3_bucket_name: str = ""
+
     # Deployed frontend origin (for CORS)
     frontend_origin: str = ""
 

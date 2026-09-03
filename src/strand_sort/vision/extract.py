@@ -1,5 +1,6 @@
 import base64
 import uuid
+import hashlib
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from typing import Literal
@@ -67,6 +68,11 @@ INDIAN PACKAGING & DOT-MATRIX RULES:
     * is_low_sodium: True if sodium <= 140mg per serving or explicitly labeled "Low Sodium". (True for fresh eggs (~70mg/egg), unsalted butter, milk, and whole grains).
     * is_gluten_free: True if explicitly labeled "Gluten-Free" OR if the item is naturally gluten-free single-ingredient food (e.g., fresh eggs, dairy milk, butter, rice). Set False for wheat/atta products.
     * is_vegan: True if explicitly labeled "Vegan" OR if the item contains zero animal ingredients/byproducts (e.g., 100% whole wheat atta, grains, pulses, fruits, vegetables). Set False for eggs, milk, butter, or honey.
+   - Before extracting sugar/sodium/protein numbers, first transcribe the exact raw text of those rows verbatim into raw_nutrition_text_found (e.g.,"Sugars 0.67g, Sodium 142mg, Protein 13.3g"). 
+   - Set nutrition_confidence to "high" only if the panel numbers are sharp and unambiguous. If small, blurry, or uncertain, set "low" rather than guessing.
+   - For is_low_sugar and is_low_sodium, additionally report:
+    * is_low_sugar_source: "printed_panel" if read from an actual visible sugar value; "inferred" if using general category knowledge with no visible panel value.
+    * is_low_sodium_source: same logic, for sodium.
 
 Return ONLY valid JSON matching the requested schema.
 """
@@ -74,21 +80,25 @@ Return ONLY valid JSON matching the requested schema.
 
 def _to_donation_item(result: VisionExtraction) -> DonationItem:
     raw_text = result.raw_date_text_found
+
+    has_real_date = raw_text.strip().upper() not in ("NONE", "NULL", "")
+    expiration_date_raw = result.expiration_date_raw if has_real_date else None
+
     if raw_text and raw_text.strip().upper() in ("NONE", "NULL", ""):
         raw_text = None
 
     is_expired = False
-    if result.expiration_date_raw:
+    if expiration_date_raw:
         try:
-            parsed = datetime.strptime(result.expiration_date_raw, "%Y-%m-%d").date()
+            parsed = datetime.strptime(expiration_date_raw, "%Y-%m-%d").date()
             is_expired = parsed < date.today()
         except ValueError:
-            logger.warning(f"Unparseable expiration date: {result.expiration_date_raw!r}")
+            logger.warning(f"Unparseable expiration date: {expiration_date_raw!r}")
 
     # Optional validation
     suspect_packing_date = False
-    if result.raw_date_text_found and any(kw in result.raw_date_text_found.upper() for kw in ["MFG", "PKD", "PACKED"]):
-        logger.warning(f"Possible packing date detected instead of expiry: {result.raw_date_text_found}")
+    if has_real_date and any(kw in raw_text.upper() for kw in ["MFG", "PKD", "PACKED"]):
+        logger.warning(f"Possible packing date detected instead of expiry: {raw_text}")
         suspect_packing_date = True
 
     requires_review = (
@@ -104,7 +114,9 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
         if result.is_damaged:
             reasons.append(f"damaged: {result.damage_description or 'unspecified'}")
         if is_expired:
-            reasons.append(f"EXPIRED item detected ({result.expiration_date_raw})")
+            reasons.append(f"EXPIRED item detected ({expiration_date_raw})")
+        if result.date_confidence == "low":
+            reasons.append(f"low-confidence date read (unverified: {expiration_date_raw or raw_text})")
         # if result.expiration_date_raw is not None:
         #     label = "expired" if is_expired else "expiry date detected"
         #     reasons.append(f"{label} (unverified, confidence={result.date_confidence}: {result.expiration_date_raw})")
@@ -115,11 +127,11 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
         reason = "; ".join(reasons)
 
     return DonationItem(
-        item_id=str(uuid.uuid4()),
+        item_id=generate_idempotency_key(result.product_name, result.expiration_date_raw or ""),
         product_name=result.product_name,
         category=result.category,
         raw_date_text_found=raw_text,
-        expiration_date=result.expiration_date_raw,
+        expiration_date=expiration_date_raw,
         date_confidence=result.date_confidence,
         is_expired=is_expired,
         is_damaged=result.is_damaged,
@@ -218,3 +230,8 @@ def get_extractor(images_base64: list[str]) -> DonationItem:
             return GeminiExtractor().extract(images_base64)
         logger.error(f"Bedrock call failed with unhandled error code: {error_code}")
         raise
+
+def generate_idempotency_key(product_name: str, expiration_date: str) -> str:
+    """Creates a deterministic hash based on static product traits"""
+    raw = f"{product_name.strip().lower()}|{expiration_date.strip()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
