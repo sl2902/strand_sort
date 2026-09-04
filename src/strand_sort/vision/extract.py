@@ -2,7 +2,6 @@ import base64
 import uuid
 import hashlib
 from abc import ABC, abstractmethod
-from datetime import date, datetime
 from typing import Literal
 
 import boto3
@@ -13,8 +12,9 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from strand_sort.config import settings, BEDROCK_FALLBACK_ERROR_CODES
+from strand_sort.expiry import ExpiryStatus, compute_expiry_status
 from strand_sort.models import (
-    Category, 
+    Category,
     DonationItem,
     VisionExtraction,
     DietaryFlags,
@@ -77,6 +77,26 @@ INDIAN PACKAGING & DOT-MATRIX RULES:
 Return ONLY valid JSON matching the requested schema.
 """
 
+LOW_SUGAR_THRESHOLD_G = 5.0       # per 100g/serving, matching the system prompt's own stated rule
+LOW_SODIUM_THRESHOLD_MG = 140.0   # per serving, matching the system prompt's own stated rule
+
+
+def _recompute_low_sugar(nf: NutritionFacts) -> tuple[bool, str] | None:
+    """Returns (is_low_sugar, source) computed from the extracted sugars_g, or
+    None when there's no real number to check (no panel found, or sugars_g
+    wasn't extracted) — callers should leave the model's own inferred value
+    untouched in that case rather than guessing."""
+    if not nf.panel_found or nf.sugars_g is None:
+        return None
+    return nf.sugars_g <= LOW_SUGAR_THRESHOLD_G, "printed_panel"
+
+
+def _recompute_low_sodium(nf: NutritionFacts) -> tuple[bool, str] | None:
+    """Same as _recompute_low_sugar, for sodium_mg."""
+    if not nf.panel_found or nf.sodium_mg is None:
+        return None
+    return nf.sodium_mg <= LOW_SODIUM_THRESHOLD_MG, "printed_panel"
+
 
 def _to_donation_item(result: VisionExtraction) -> DonationItem:
     raw_text = result.raw_date_text_found
@@ -87,13 +107,17 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
     if raw_text and raw_text.strip().upper() in ("NONE", "NULL", ""):
         raw_text = None
 
-    is_expired = False
-    if expiration_date_raw:
-        try:
-            parsed = datetime.strptime(expiration_date_raw, "%Y-%m-%d").date()
-            is_expired = parsed < date.today()
-        except ValueError:
-            logger.warning(f"Unparseable expiration date: {expiration_date_raw!r}")
+    # This is the intake-time snapshot only, used below to decide whether to
+    # flag/route the item for review right now — it is NOT what callers
+    # should trust later. expiry_status (and is_expired) get recomputed
+    # fresh from expiration_date on every API read (see strand_sort/api/
+    # inventory.py, review.py), since "is this expired" changes daily even
+    # though the stored date doesn't; a value frozen here would silently go
+    # stale the moment the item sits in inventory past today.
+    intake_expiry_status = compute_expiry_status(expiration_date_raw)
+    if expiration_date_raw and intake_expiry_status is None:
+        logger.warning(f"Unparseable expiration date: {expiration_date_raw!r}")
+    is_expired = intake_expiry_status == ExpiryStatus.EXPIRED
 
     # Optional validation
     suspect_packing_date = False
@@ -126,18 +150,35 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
             reasons.append(f"suspected packing date extracted ({raw_text})")
         reason = "; ".join(reasons)
 
+    # Never trust the model's own is_low_sugar/is_low_sodium booleans when a
+    # real printed number is already in hand — same failure mode as
+    # is_expired above: the model can misapply its own stated threshold, or
+    # fall back on a category-level assumption that contradicts a number it
+    # already extracted (e.g. "snacks are usually low sodium" overriding an
+    # actual 222mg reading). Recompute deterministically and override;
+    # only fall back to the model's own inference when there's no real
+    # number to check it against.
+    dietary_flags = result.dietary_flags.model_copy()
+    low_sugar = _recompute_low_sugar(result.nutrition_facts)
+    if low_sugar is not None:
+        dietary_flags.is_low_sugar, dietary_flags.is_low_sugar_source = low_sugar
+    low_sodium = _recompute_low_sodium(result.nutrition_facts)
+    if low_sodium is not None:
+        dietary_flags.is_low_sodium, dietary_flags.is_low_sodium_source = low_sodium
+
     return DonationItem(
         item_id=generate_idempotency_key(result.product_name, result.expiration_date_raw or ""),
         product_name=result.product_name,
         category=result.category,
-        raw_date_text_found=raw_text,
+        raw_date_text_found=raw_text or "NONE",
         expiration_date=expiration_date_raw,
         date_confidence=result.date_confidence,
         is_expired=is_expired,
+        expiry_status=intake_expiry_status,
         is_damaged=result.is_damaged,
         requires_human_review=requires_review,
         review_reason=reason,
-        dietary_flags=result.dietary_flags,
+        dietary_flags=dietary_flags,
         nutrition_facts=result.nutrition_facts,
     )
 

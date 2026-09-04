@@ -1,8 +1,13 @@
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from strand_sort.models import DonationItem
+
+
+def _iso(days_from_today: int) -> str:
+    return (date.today() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
 
 
 @pytest.fixture
@@ -48,6 +53,30 @@ def test_list_review_queue(mock_queue, client, valid_donation_item):
     response = client.get("/api/v1/review/pending")
     assert response.status_code == 200
     assert response.json()[0]["item_id"] == "abc123"
+
+
+@patch("strand_sort.api.review.review_queue")
+def test_pending_review_overrides_stale_is_expired(mock_queue, client):
+    """Flagged items sit in the review queue for however long a volunteer
+    takes to get to them — a date that was fine when scanned can pass while
+    it's still pending. is_expired/expiry_status must reflect today, not
+    whatever was true when the item was flagged."""
+    item = DonationItem(
+        item_id="stale123",
+        product_name="Forgotten Milk",
+        category="dairy_liquid",
+        raw_date_text_found="unreadable",
+        expiration_date=_iso(-3),
+        date_confidence="low",
+        is_expired=False,  # stale — was fine when flagged, isn't anymore
+        requires_human_review=True,
+        review_reason="low-confidence date read",
+    )
+    mock_queue.get_pending.return_value = [item]
+
+    body = client.get("/api/v1/review/pending").json()[0]
+    assert body["is_expired"] is True
+    assert body["expiry_status"] == "expired"
 
 
 @patch("strand_sort.api.review.commit_to_inventory")

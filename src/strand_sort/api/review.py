@@ -7,6 +7,7 @@ from strand_sort.agent.queue import review_queue
 from strand_sort.agent.tools import commit_to_inventory
 from strand_sort.models import DonationItem
 from strand_sort.storage.image_storage import resolve_image_urls
+from strand_sort.expiry import ExpiryStatus, compute_expiry_status
 
 router = APIRouter()
 
@@ -17,13 +18,20 @@ class ReviewResolutionRequest(BaseModel):
     notes: Optional[str] = None
 
 
+def _decorate_item(item: DonationItem) -> DonationItem:
+    """Same freshness rule as api/inventory.py — recomputed on every read,
+    never trusted from whatever was set when the item was first flagged."""
+    item.image_urls = resolve_image_urls(item.image_urls)
+    status = compute_expiry_status(item.expiration_date)
+    item.expiry_status = status
+    item.is_expired = status == ExpiryStatus.EXPIRED
+    return item
+
+
 @router.get("/review/pending", response_model=List[DonationItem])
 def get_pending_reviews():
     """Retrieve all flagged items awaiting human verification"""
-    items = review_queue.get_pending()
-    for item in items:
-        item.image_urls = resolve_image_urls(item.image_urls)
-    return items
+    return [_decorate_item(item) for item in review_queue.get_pending()]
 
 
 @router.post("/review/resolve/{item_id}")

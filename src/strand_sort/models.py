@@ -4,6 +4,8 @@ from typing import Optional, Literal
 
 from enum import Enum
 
+from strand_sort.expiry import ExpiryStatus
+
 
 class Category(str, Enum):
     CANNED_PROTEIN = "canned_protein"       # canned meat, beans, tuna
@@ -59,7 +61,10 @@ class DonationItem(BaseModel):
     raw_date_text_found: str = Field(description="Forces OCR attention step")
     expiration_date: Optional[str] = Field(None, description="Extracted date string YYYY-MM-DD if present")
     date_confidence: Literal["high", "low"] | None = Field(None, description="Categorise confidence in date extraction") 
-    is_expired: bool = Field(False, description="True if past safety threshold")
+    is_expired: bool = Field(False, description="True if past safety threshold — recomputed on every API read, never trust a stored value")
+    expiry_status: Optional[ExpiryStatus] = Field(
+        None, description="fine/near_expiry/expired, recomputed fresh on every API read from expiration_date"
+    )
     is_damaged: bool = Field(False, description="True if dents, rust, or leaks are visible")
     requires_human_review: bool = Field(False, description="True if date is unreadable or item is severely damaged")
     review_reason: Optional[str] = Field(None, description="Explanation for human flag")

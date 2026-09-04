@@ -1,4 +1,63 @@
+from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
+
+
+def _iso(days_from_today: int) -> str:
+    return (date.today() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_list_inventory_overrides_stale_is_expired_false(mock_get_repo, client):
+    """The core bug: an item stored with is_expired=False (correct at scan
+    time) whose expiration_date has since passed must come back corrected —
+    never the stale stored value."""
+    mock_repo = MagicMock()
+    mock_repo.list_all.return_value = [
+        {
+            "item_id": "abc",
+            "product_name": "Old Eggs",
+            "expiration_date": _iso(-5),
+            "is_expired": False,  # stale, wrong by the time this is read
+        }
+    ]
+    mock_get_repo.return_value = mock_repo
+
+    body = client.get("/api/v1/inventory").json()[0]
+    assert body["is_expired"] is True
+    assert body["expiry_status"] == "expired"
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_list_inventory_overrides_stale_is_expired_true(mock_get_repo, client):
+    """Same bug, other direction — a stored is_expired=True must not leak
+    through if the item is actually still fine."""
+    mock_repo = MagicMock()
+    mock_repo.list_all.return_value = [
+        {
+            "item_id": "abc",
+            "product_name": "Fresh Eggs",
+            "expiration_date": _iso(30),
+            "is_expired": True,  # stale/wrong
+        }
+    ]
+    mock_get_repo.return_value = mock_repo
+
+    body = client.get("/api/v1/inventory").json()[0]
+    assert body["is_expired"] is False
+    assert body["expiry_status"] == "fine"
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_list_inventory_near_expiry_item(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.list_all.return_value = [
+        {"item_id": "abc", "product_name": "Soon-expiring Milk", "expiration_date": _iso(3)}
+    ]
+    mock_get_repo.return_value = mock_repo
+
+    body = client.get("/api/v1/inventory").json()[0]
+    assert body["expiry_status"] == "near_expiry"
+    assert body["is_expired"] is False
 
 
 @patch("strand_sort.api.inventory.get_inventory_repository")
@@ -9,7 +68,15 @@ def test_list_inventory_no_filter_calls_list_all(mock_get_repo, client):
 
     response = client.get("/api/v1/inventory")
     assert response.status_code == 200
-    assert response.json() == [{"item_id": "abc", "product_name": "Eggs", "image_urls": []}]
+    assert response.json() == [
+        {
+            "item_id": "abc",
+            "product_name": "Eggs",
+            "image_urls": [],
+            "expiry_status": None,
+            "is_expired": False,
+        }
+    ]
     mock_repo.list_all.assert_called_once()
     mock_repo.search_by_name.assert_not_called()
 

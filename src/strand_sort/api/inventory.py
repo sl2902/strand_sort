@@ -4,15 +4,20 @@ from fastapi import APIRouter, HTTPException, Query
 
 from strand_sort.db.repository import get_inventory_repository
 from strand_sort.storage.image_storage import resolve_image_urls
+from strand_sort.expiry import ExpiryStatus, compute_expiry_status
 
 router = APIRouter()
 
 
-def _with_resolved_images(item: dict[str, Any]) -> dict[str, Any]:
-    """Regenerates fetchable image URLs on every read — S3 presigned URLs
-    expire, so what's stored on the item is a durable reference, never a URL
-    that might already be stale by the time a client sees it."""
+def _decorate_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Applied on every read — nothing here should ever be trusted from what
+    got persisted at intake/commit time, both can silently go stale:
+    presigned S3 URLs expire, and "is this expired" changes daily even
+    though the stored date doesn't."""
     item["image_urls"] = resolve_image_urls(item.get("image_urls", []))
+    status = compute_expiry_status(item.get("expiration_date"))
+    item["expiry_status"] = status
+    item["is_expired"] = status == ExpiryStatus.EXPIRED
     return item
 
 
@@ -21,7 +26,7 @@ def list_inventory(name: Optional[str] = Query(None, description="Filter by prod
     """List all stock items, or search by product name."""
     repo = get_inventory_repository()
     items = repo.search_by_name(name) if name else repo.list_all()
-    return [_with_resolved_images(item) for item in items]
+    return [_decorate_item(item) for item in items]
 
 
 @router.get("/inventory/{item_id}")
@@ -31,7 +36,7 @@ def get_item(item_id: str) -> dict[str, Any]:
     item = repo.get_by_id(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
-    return _with_resolved_images(item)
+    return _decorate_item(item)
 
 
 @router.post("/inventory/{item_id}/checkout")
