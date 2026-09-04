@@ -23,18 +23,24 @@ def _decorate_item(item: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/inventory")
 def list_inventory(name: Optional[str] = Query(None, description="Filter by product name")) -> list[dict[str, Any]]:
-    """List all stock items, or search by product name."""
+    """List all stock items, or search by product name. Items still awaiting
+    human review live in the same table but are excluded here — they only
+    surface via /review/pending until resolved."""
     repo = get_inventory_repository()
     items = repo.search_by_name(name) if name else repo.list_all()
-    return [_decorate_item(item) for item in items]
+    committed = [item for item in items if not item.get("requires_human_review")]
+    return [_decorate_item(item) for item in committed]
 
 
 @router.get("/inventory/{item_id}")
 def get_item(item_id: str) -> dict[str, Any]:
-    """Retrieve complete item metadata including nutrition and dietary flags."""
+    """Retrieve complete item metadata including nutrition and dietary flags.
+    404s for items still pending review — from Inventory's perspective they
+    don't exist yet (e.g. checking out unverified stock shouldn't be
+    possible), only /review/pending exposes them."""
     repo = get_inventory_repository()
     item = repo.get_by_id(item_id)
-    if not item:
+    if not item or item.get("requires_human_review"):
         raise HTTPException(status_code=404, detail="Item not found")
     return _decorate_item(item)
 
@@ -59,3 +65,14 @@ def update_item(item_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         return repo.update_item(item_id, updates)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/inventory/{item_id}")
+def delete_item(item_id: str) -> dict[str, Any]:
+    """Permanently removes an item from inventory — no soft-delete, no undo."""
+    repo = get_inventory_repository()
+    existing = repo.get_by_id(item_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Item not found")
+    repo.delete_item(item_id)
+    return {"status": "deleted", "item_id": item_id}

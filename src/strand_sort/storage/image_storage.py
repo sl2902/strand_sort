@@ -5,6 +5,24 @@ from pathlib import Path
 import boto3
 from strand_sort.config import settings
 
+# image_storage.py -> storage/ -> strand_sort/ -> src/ -> repo root. Anchored
+# to where this file lives on disk, not the process's cwd — a plain relative
+# path (e.g. "data/raw") would resolve differently depending on what
+# directory uvicorn happens to be launched from, silently orphaning every
+# image saved under a previous cwd once the server is restarted from a
+# different one.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
+def resolve_local_storage_path(configured_path: str | None = None) -> Path:
+    """Resolves the local image storage directory to an absolute path that's
+    stable regardless of the current working directory. Used for both the
+    save path (here) and the StaticFiles serve mount (main.py) so they can
+    never diverge."""
+    raw = configured_path or settings.image_storage_local_path
+    path = Path(raw)
+    return path if path.is_absolute() else (_PACKAGE_ROOT / path)
+
 
 class ImageStorage(ABC):
     @abstractmethod
@@ -26,7 +44,7 @@ class LocalImageStorage(ImageStorage):
     def __init__(self, base_path: str | None = None):
         # Read settings lazily rather than as a default-arg (evaluated once at
         # import time) so tests can override settings.image_storage_local_path.
-        self.base_path = Path(base_path or settings.image_storage_local_path)
+        self.base_path = resolve_local_storage_path(base_path)
 
     def save_images(self, item_id: str, source_paths: list[str]) -> list[str]:
         item_dir = self.base_path / item_id
@@ -83,6 +101,24 @@ def get_image_storage() -> ImageStorage:
     if settings.storage_backend == "s3":
         return S3ImageStorage()
     return LocalImageStorage()
+
+
+def check_local_image_integrity(local_root: Path, items: list[dict]) -> list[str]:
+    """Checks that every locally-stored image reference in `items` still
+    points at a file that actually exists under `local_root`. Meant to be
+    called on every app startup/reload — exactly the moment a relative
+    storage path resolving against a different cwd would silently orphan
+    previously-saved images. Returns the list of missing "item_id: url"
+    references (empty if everything's fine)."""
+    missing: list[str] = []
+    for item in items:
+        for url in item.get("image_urls") or []:
+            if not url.startswith("/images/"):
+                continue  # not a local reference (e.g. an S3 key from a different backend)
+            rel_path = url[len("/images/"):]
+            if not (local_root / rel_path).exists():
+                missing.append(f"{item.get('item_id')}: {url}")
+    return missing
 
 
 def resolve_image_urls(refs: list[str]) -> list[str]:

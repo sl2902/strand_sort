@@ -1,81 +1,75 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from strand_sort.agent.queue import review_queue
 from strand_sort.agent.tools import commit_to_inventory
-from strand_sort.models import DonationItem
 
 
-@pytest.fixture(autouse=True)
-def clean_review_queue():
-    """review_queue is a module-level singleton — don't leak state across tests."""
-    review_queue._pending_reviews.clear()
-    yield
-    review_queue._pending_reviews.clear()
-
-
-def _flagged_item(item_id: str, product_name: str) -> DonationItem:
-    return DonationItem(
-        item_id=item_id,
-        product_name=product_name,
-        category="dairy_liquid",
-        raw_date_text_found="unreadable",
-        expiration_date=None,
-        date_confidence="low",
-        requires_human_review=True,
-        review_reason="low-confidence date read",
-    )
-
-
-class TestCommitClearsReviewQueue:
-    """A retried agent run (see the Bedrock->Gemini fallback in
-    run_intake_workflow) can flag an item on one attempt and commit it on
-    another. commit_to_inventory must always clear any pending review flag
-    for the item it just committed, or the item ends up visible in both
-    Inventory and the Review queue simultaneously."""
+class TestCommitToInventoryClearsPendingReview:
+    """Flagged items are now persisted straight to the inventory table with
+    requires_human_review=True (see scan_package_batch) instead of a
+    separate in-memory queue. commit_to_inventory must always leave the
+    committed row with requires_human_review=False, and must clean up any
+    now-orphaned pending-review row left behind when a commit merges into a
+    *different* existing row — otherwise that orphan lingers in
+    /review/pending forever."""
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
-    def test_new_batch_commit_clears_pending_review(self, mock_get_repo):
-        item_id = "milk-abc123"
-        review_queue.add_for_review(_flagged_item(item_id, "Milk"))
-        assert review_queue.get_pending()  # sanity: it's actually there first
-
+    def test_new_batch_commit_clears_requires_human_review(self, mock_get_repo):
         mock_repo = MagicMock()
         mock_repo.check_duplicate_active_inventory.return_value = None
         mock_get_repo.return_value = mock_repo
 
         commit_to_inventory({
-            "item_id": item_id,
+            "item_id": "milk-abc123",
             "product_name": "Milk",
             "expiration_date": "2026-10-01",
             "quantity": 1,
+            "requires_human_review": True,  # e.g. an approved review item
         })
 
-        assert review_queue.get_pending() == []
+        saved = mock_repo.save_item.call_args[0][0]
+        assert saved["requires_human_review"] is False
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
-    def test_increment_existing_batch_clears_pending_review(self, mock_get_repo):
-        item_id = "milk-abc123"
-        review_queue.add_for_review(_flagged_item(item_id, "Milk"))
-
+    def test_increment_existing_batch_deletes_orphaned_pending_row(self, mock_get_repo):
+        """The incoming item_id (e.g. a fresh re-scan, or an approved review
+        item) is different from the existing duplicate's item_id — its own
+        row, if any, must be deleted so it doesn't linger."""
         mock_repo = MagicMock()
-        mock_repo.check_duplicate_active_inventory.return_value = {"item_id": item_id, "quantity": 2}
-        mock_repo.increment_quantity.return_value = {"item_id": item_id, "quantity": 3, "image_urls": []}
+        mock_repo.check_duplicate_active_inventory.return_value = {"item_id": "existing-id", "quantity": 2}
+        mock_repo.increment_quantity.return_value = {"item_id": "existing-id", "quantity": 3, "image_urls": []}
         mock_get_repo.return_value = mock_repo
 
         commit_to_inventory({
-            "item_id": "some-new-scan-id",  # a fresh scan of the same product/date
+            "item_id": "some-new-scan-id",
             "product_name": "Milk",
             "expiration_date": "2026-10-01",
             "quantity": 1,
         })
 
-        assert review_queue.get_pending() == []
+        mock_repo.delete_item.assert_called_once_with("some-new-scan-id")
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
-    def test_commit_is_a_no_op_on_review_queue_when_nothing_pending(self, mock_get_repo):
-        """discard() must not raise when the item was never flagged."""
+    def test_increment_does_not_delete_the_row_it_just_incremented(self, mock_get_repo):
+        """Exact re-scan producing the same item_id as the existing duplicate
+        — deleting here would destroy the row increment_quantity just
+        updated."""
+        mock_repo = MagicMock()
+        mock_repo.check_duplicate_active_inventory.return_value = {"item_id": "same-id", "quantity": 2}
+        mock_repo.increment_quantity.return_value = {"item_id": "same-id", "quantity": 3, "image_urls": []}
+        mock_get_repo.return_value = mock_repo
+
+        commit_to_inventory({
+            "item_id": "same-id",
+            "product_name": "Milk",
+            "expiration_date": "2026-10-01",
+            "quantity": 1,
+        })
+
+        mock_repo.delete_item.assert_not_called()
+
+    @patch("strand_sort.agent.tools.get_inventory_repository")
+    def test_commit_new_batch_does_not_call_delete(self, mock_get_repo):
+        """No pre-existing duplicate at all — nothing to clean up."""
         mock_repo = MagicMock()
         mock_repo.check_duplicate_active_inventory.return_value = None
         mock_get_repo.return_value = mock_repo
@@ -87,4 +81,4 @@ class TestCommitClearsReviewQueue:
             "quantity": 1,
         })
 
-        assert review_queue.get_pending() == []
+        mock_repo.delete_item.assert_not_called()

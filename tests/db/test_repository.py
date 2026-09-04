@@ -63,6 +63,30 @@ class TestSQLiteRepository:
         assert existing is not None
         assert existing["item_id"] == sample_item["item_id"]
 
+    def test_check_duplicate_active_inventory_skips_pending_review_rows(self, sqlite_repo, sample_item):
+        """A row still awaiting human review shares this table now but isn't
+        'active inventory' yet — must not match as a duplicate to increment
+        against (this would also cause a resolved review item to spuriously
+        match itself)."""
+        pending = dict(sample_item, item_id="pending-id", requires_human_review=True)
+        sqlite_repo.save_item(pending)
+
+        existing = sqlite_repo.check_duplicate_active_inventory("Organic Milk", "2026-10-15")
+        assert existing is None
+
+    def test_check_duplicate_active_inventory_finds_committed_past_pending(self, sqlite_repo, sample_item):
+        """Both a pending-review row and a committed row exist for the same
+        product/date — the committed one must be the match, regardless of
+        SQL row ordering."""
+        pending = dict(sample_item, item_id="pending-id", requires_human_review=True)
+        committed = dict(sample_item, item_id="committed-id", requires_human_review=False)
+        sqlite_repo.save_item(pending)
+        sqlite_repo.save_item(committed)
+
+        existing = sqlite_repo.check_duplicate_active_inventory("Organic Milk", "2026-10-15")
+        assert existing is not None
+        assert existing["item_id"] == "committed-id"
+
     def test_increment_quantity(self, sqlite_repo, sample_item):
         sqlite_repo.save_item(sample_item)
         updated = sqlite_repo.increment_quantity(sample_item["item_id"], additional_qty=3)
@@ -146,6 +170,13 @@ class TestDynamoDBRepository:
         dynamo_repo.save_item(sample_item)
         existing = dynamo_repo.check_duplicate_active_inventory("Organic Milk", "2026-10-15")
         assert existing is not None
+
+    def test_check_duplicate_active_inventory_skips_pending_review_rows(self, dynamo_repo, sample_item):
+        pending = dict(sample_item, item_id="pending-id", requires_human_review=True)
+        dynamo_repo.save_item(pending)
+
+        existing = dynamo_repo.check_duplicate_active_inventory("Organic Milk", "2026-10-15")
+        assert existing is None
 
     def test_increment_quantity(self, dynamo_repo, sample_item):
         dynamo_repo.save_item(sample_item)

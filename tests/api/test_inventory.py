@@ -94,6 +94,25 @@ def test_list_inventory_with_name_filter(mock_get_repo, client):
 
 
 @patch("strand_sort.api.inventory.get_inventory_repository")
+def test_list_inventory_excludes_pending_review_items(mock_get_repo, client):
+    """Pending-review items live in the same table now (see api/review.py) —
+    they must not leak into the normal Inventory listing, or the item would
+    show up both as verified stock AND awaiting review simultaneously."""
+    mock_repo = MagicMock()
+    mock_repo.list_all.return_value = [
+        {"item_id": "committed", "product_name": "Eggs", "requires_human_review": False},
+        {"item_id": "pending", "product_name": "Milk", "requires_human_review": True},
+    ]
+    mock_get_repo.return_value = mock_repo
+
+    response = client.get("/api/v1/inventory")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["item_id"] == "committed"
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
 def test_get_item_found(mock_get_repo, client):
     mock_repo = MagicMock()
     mock_repo.get_by_id.return_value = {"item_id": "abc", "product_name": "Eggs"}
@@ -111,6 +130,19 @@ def test_get_item_not_found(mock_get_repo, client):
     mock_get_repo.return_value = mock_repo
 
     response = client.get("/api/v1/inventory/nonexistent")
+    assert response.status_code == 404
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_get_item_pending_review_returns_404(mock_get_repo, client):
+    """A pending-review item isn't real inventory yet — direct lookup by id
+    must 404 the same as if it didn't exist, so e.g. checkout can't target
+    unverified stock."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "product_name": "Eggs", "requires_human_review": True}
+    mock_get_repo.return_value = mock_repo
+
+    response = client.get("/api/v1/inventory/abc")
     assert response.status_code == 404
 
 
@@ -160,3 +192,26 @@ def test_update_item_not_found(mock_get_repo, client):
 
     response = client.patch("/api/v1/inventory/xyz", json={"product_name": "X"})
     assert response.status_code == 404
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_delete_item_success(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "product_name": "Eggs"}
+    mock_get_repo.return_value = mock_repo
+
+    response = client.delete("/api/v1/inventory/abc")
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted", "item_id": "abc"}
+    mock_repo.delete_item.assert_called_once_with("abc")
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_delete_item_not_found(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = None
+    mock_get_repo.return_value = mock_repo
+
+    response = client.delete("/api/v1/inventory/nonexistent")
+    assert response.status_code == 404
+    mock_repo.delete_item.assert_not_called()

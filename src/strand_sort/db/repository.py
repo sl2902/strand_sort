@@ -151,8 +151,15 @@ class SQLiteRepository(InventoryRepository):
                 "SELECT payload FROM inventory WHERE LOWER(product_name) = LOWER(?) AND expiration_date = ?",
                 (product_name.strip(), expiration_date.strip())
             )
-            row = cursor.fetchone()
-            return json.loads(row[0]) if row else None
+            # Pending-review rows share this table now (see save_item calls in
+            # scan_package_batch) — a row still awaiting review isn't "active
+            # inventory" yet and must never match here, so skip past it to
+            # find a genuinely committed duplicate, if any.
+            for (payload_json,) in cursor.fetchall():
+                payload = json.loads(payload_json)
+                if not payload.get("requires_human_review"):
+                    return payload
+            return None
 
     def increment_quantity(
         self, item_id: str, additional_qty: int, image_urls: Optional[list[str]] = None
@@ -302,10 +309,14 @@ class DynamoDBRepository(InventoryRepository):
         return items[0] if items else None
 
     def check_duplicate_active_inventory(self, product_name: str, expiration_date: str) -> Optional[dict[str, Any]]:
+        # Pending-review rows share this table now — exclude them from
+        # "active inventory" matches. not_exists() covers rows saved before
+        # this attribute was consistently present.
         response = self.table.query(
             IndexName="ProductNameIndex",
             KeyConditionExpression=Key("product_name").eq(product_name),
             FilterExpression=Attr("expiration_date").eq(expiration_date)
+            & (Attr("requires_human_review").eq(False) | Attr("requires_human_review").not_exists())
         )
         items = response.get("Items", [])
         return items[0] if items else None

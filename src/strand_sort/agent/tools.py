@@ -5,7 +5,6 @@ from typing import Any
 from strands import tool
 from strand_sort.models import DonationItem
 from strand_sort.vision.extract import get_extractor
-from strand_sort.agent.queue import review_queue
 from strand_sort.db.repository import get_inventory_repository
 from strand_sort.vision.extract import generate_idempotency_key
 from strand_sort.storage.image_storage import get_image_storage
@@ -28,7 +27,13 @@ def scan_package_batch(image_paths: list[str]) -> dict[str, Any]:
     item.image_urls = storage.save_images(item.item_id, image_paths)
 
     if item.requires_human_review:
-        review_queue.add_for_review(item)
+        # Persisted straight to the inventory table with
+        # requires_human_review=True — that flag is the single source of
+        # truth for "pending review" vs "committed" (see api/review.py and
+        # api/inventory.py, which filter on it). No separate in-memory
+        # queue: that was wiped on every dev-server reload.
+        repo = get_inventory_repository()
+        repo.save_item(item.model_dump())
         return {
             "status": "flagged_for_review",
             "item_id": item.item_id,
@@ -61,6 +66,11 @@ def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
     item_data["idempotency_key"] = idempotency_key
     item_data["expiration_date"] = expiration_date  # Ensure normalized string presence
     item_data["quantity"] = incoming_qty
+    # A committed item is never pending review, regardless of what the
+    # caller passed in — this is what makes it show up in Inventory instead
+    # of the Review queue (both read from this same table, filtered on this
+    # flag; see api/inventory.py and api/review.py).
+    item_data["requires_human_review"] = False
 
     # Check for existing batch in active stock
     existing_item = repo.check_duplicate_active_inventory(product_name, expiration_date)
@@ -70,10 +80,15 @@ def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
             additional_qty=incoming_qty,
             image_urls=item_data.get("image_urls"),
         )
-        # A successful commit always supersedes any pending review flag for
-        # this item_id — e.g. a retried agent run can flag it on one attempt
-        # and commit it on another (see ExceptionReviewQueue.discard).
-        review_queue.discard(existing_item["item_id"])
+        incoming_item_id = item_data.get("item_id")
+        if incoming_item_id and incoming_item_id != existing_item["item_id"]:
+            # item_data may already have its own row (e.g. it was sitting
+            # pending review before being approved, or re-scanned under a
+            # fresh item_id) — now merged into existing_item's row above, so
+            # the original row would otherwise linger as an orphan (and, if
+            # it was still requires_human_review=True, keep showing up in
+            # the Review queue forever). No-op if that row never existed.
+            repo.delete_item(incoming_item_id)
         return {
             "status": "quantity_updated",
             "action": "incremented_existing_batch",
@@ -87,9 +102,10 @@ def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
             "message": f"Added {incoming_qty} unit(s) to existing stock of '{product_name}' (Expires: {expiration_date})."
         }
 
-    # Persist new batch if no match exists
+    # Persist new batch if no match exists. If item_data's item_id already
+    # has a row (e.g. this is an approved review item), INSERT OR REPLACE
+    # overwrites it in place — same record, now committed.
     repo.save_item(item_data)
-    review_queue.discard(item_data.get("item_id"))
 
     return {
         "status": "committed",
