@@ -42,7 +42,7 @@ def _gemini_model() -> GeminiModel:
         client_args={
             "vertexai": True,
             "project": settings.gcp_project_id,
-            "location": "global" or settings.gcp_location,
+            "location": settings.gemini_location or settings.gcp_location,
         },
         model_id=settings.gemini_model_id,
         params={"temperature": 0},

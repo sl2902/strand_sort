@@ -227,7 +227,7 @@ class GeminiExtractor(VisionExtractor):
         self.client = genai.Client(
             vertexai=True,
             project=settings.gcp_project_id,
-            location="global" or settings.gcp_location,
+            location=settings.gemini_location or settings.gcp_location,
         )
         self.model_id = model_id or settings.gemini_model_id
 
