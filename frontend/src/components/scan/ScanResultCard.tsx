@@ -14,7 +14,7 @@ import { Spinner } from "../Spinner";
 import { Badge } from "../Badge";
 import { DietaryBadgeRow } from "../DietaryBadges";
 import { ImageLightbox } from "../ImageLightbox";
-import { formatDate, expiryUrgency } from "../../lib/format";
+import { expiryBadgeContent } from "../../lib/format";
 import { CATEGORY_LABELS, type DonationItem } from "../../lib/types";
 
 export interface ScanLogEntry {
@@ -141,8 +141,8 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
     item?.requires_human_review === true ? "flagged" : item?.requires_human_review === false ? "committed" : "unknown";
   const style = outcomeStyles[outcome];
   const Icon = style.icon;
-  const urgency = item ? expiryUrgency(item.expiration_date) : "unknown";
   const collapsedSubtitle = item?.product_name ?? entry.summary;
+  const expiryBadge = item ? expiryBadgeContent(item.expiry_status, item.expiration_date) : null;
   // The server's own images (extracted frames, for video too) are what's
   // worth enlarging — the local blob preview is only ever a stand-in for
   // those until they're available.
@@ -205,15 +205,13 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
               <p className="font-display text-sm font-semibold leading-snug text-ink-900">{item.product_name}</p>
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge tone="neutral">{CATEGORY_LABELS[item.category]}</Badge>
-                <Badge tone={urgency === "expired" ? "danger" : urgency === "soon" ? "saffron" : "neutral"}>
-                  {urgency === "expired" ? "Expired" : "Expires"} {formatDate(item.expiration_date)}
-                </Badge>
+                {expiryBadge && <Badge tone={expiryBadge.tone}>{expiryBadge.label}</Badge>}
                 <Badge tone="neutral">×{item.quantity}</Badge>
               </div>
               {item.requires_human_review && item.review_reason && (
                 <p className="text-xs text-saffron-700">{item.review_reason}</p>
               )}
-              <DietaryBadgeRow flags={item.dietary_flags} />
+              <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} />
             </div>
           ) : (
             <p className="mt-1 whitespace-pre-wrap text-sm leading-snug text-ink-800/90">{entry.summary}</p>

@@ -63,7 +63,7 @@ export function ReviewItemCard({
       </div>
 
       <div className="mt-3">
-        <DietaryBadgeRow flags={item.dietary_flags} />
+        <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} />
       </div>
 
       <div className="mt-4 space-y-3 border-t border-cream-200 pt-4">

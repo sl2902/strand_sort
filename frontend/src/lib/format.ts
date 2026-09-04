@@ -1,3 +1,5 @@
+import type { ExpiryStatus } from "./types";
+
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "Unknown";
   const parsed = new Date(`${iso}T00:00:00`);
@@ -5,16 +7,28 @@ export function formatDate(iso: string | null | undefined): string {
   return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-export type ExpiryUrgency = "expired" | "soon" | "ok" | "unknown";
+/**
+ * Tone + label for the expiry badge, driven entirely by the backend's
+ * expiry_status — deliberately NOT recomputed client-side. This used to be
+ * a separate client-side day-count check with its own threshold (30 days),
+ * which had quietly drifted from the backend's own near-expiry window (7
+ * days) — two sources of truth for the same fact, silently disagreeing.
+ * expiry_status is recomputed fresh by the backend on every read, so it's
+ * the one place this should be decided.
+ */
+export function expiryBadgeContent(
+  status: ExpiryStatus | null | undefined,
+  expirationDate: string | null | undefined
+): { tone: "neutral" | "saffron" | "danger"; label: string } {
+  const dateText = formatDate(expirationDate);
+  if (status === "expired") return { tone: "danger", label: `Expired ${dateText}` };
+  if (status === "near_expiry") return { tone: "saffron", label: `Expires soon: ${dateText}` };
+  return { tone: "neutral", label: `Expires ${dateText}` };
+}
 
-export function expiryUrgency(iso: string | null | undefined): ExpiryUrgency {
-  if (!iso) return "unknown";
-  const parsed = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return "unknown";
-  const daysLeft = (parsed.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-  if (daysLeft < 0) return "expired";
-  if (daysLeft <= 30) return "soon";
-  return "ok";
+/** Soonest-expiring first; items with no date sink to the bottom. */
+export function byExpirationDateAscending<T extends { expiration_date: string | null }>(a: T, b: T): number {
+  return (a.expiration_date ?? "9999").localeCompare(b.expiration_date ?? "9999");
 }
 
 export function daysUntil(iso: string | null | undefined): number | null {

@@ -66,6 +66,8 @@ export interface NutritionFacts {
   fssai_symbol_found: FssaiSymbol;
 }
 
+export type ExpiryStatus = "fine" | "near_expiry" | "expired";
+
 export interface DonationItem {
   item_id: string;
   product_name: string;
@@ -73,7 +75,11 @@ export interface DonationItem {
   raw_date_text_found: string;
   expiration_date: string | null;
   date_confidence: "high" | "low" | null;
+  /** Recomputed by the backend on every read from expiration_date — never
+   * stale, unlike a value that was frozen at scan time. Prefer this over
+   * client-side date math wherever a DonationItem is already in hand. */
   is_expired: boolean;
+  expiry_status: ExpiryStatus | null;
   is_damaged: boolean;
   requires_human_review: boolean;
   review_reason: string | null;

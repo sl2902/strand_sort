@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { Camera, Boxes, ListChecks } from "lucide-react";
+import { Camera, Boxes, ListChecks, AlarmClock } from "lucide-react";
 import clsx from "clsx";
 
 function NavItem({
@@ -38,7 +38,13 @@ function NavItem({
   );
 }
 
-export function NavBar({ pendingReviewCount }: { pendingReviewCount: number }) {
+export function NavBar({
+  pendingReviewCount,
+  expiringCount,
+}: {
+  pendingReviewCount: number;
+  expiringCount: number;
+}) {
   return (
     <header className="sticky top-0 z-40 border-b border-cream-300/70 bg-cream-100/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
@@ -54,6 +60,12 @@ export function NavBar({ pendingReviewCount }: { pendingReviewCount: number }) {
         <nav className="flex items-center gap-1.5 sm:gap-2">
           <NavItem to="/" icon={<Camera size={16} />} label="Scan" />
           <NavItem to="/inventory" icon={<Boxes size={16} />} label="Inventory" />
+          <NavItem
+            to="/expiring"
+            icon={<AlarmClock size={16} />}
+            label="Expiring"
+            badge={expiringCount}
+          />
           <NavItem
             to="/review"
             icon={<ListChecks size={16} />}

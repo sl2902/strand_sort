@@ -6,8 +6,9 @@ import { CATEGORY_LABELS, type DonationItem } from "../lib/types";
 import { Badge } from "../components/Badge";
 import { DietaryDetailList } from "../components/DietaryBadges";
 import { SourceTag } from "../components/SourceTag";
+import { FssaiMark } from "../components/FssaiMark";
 import { ImageGallery } from "../components/ItemImages";
-import { formatDate, expiryUrgency } from "../lib/format";
+import { formatDate, expiryBadgeContent } from "../lib/format";
 import { ItemEditForm } from "../components/ItemEditForm";
 import { Spinner } from "../components/Spinner";
 import { useToast } from "../components/Toast";
@@ -105,7 +106,7 @@ export function InventoryItemPage() {
     );
   }
 
-  const urgency = expiryUrgency(item.expiration_date);
+  const expiryBadge = expiryBadgeContent(item.expiry_status, item.expiration_date);
   const { dietary_flags, nutrition_facts } = item;
 
   return (
@@ -119,12 +120,15 @@ export function InventoryItemPage() {
           </p>
           <h1 className="mt-1 text-3xl font-semibold sm:text-4xl">{item.product_name}</h1>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Badge tone={urgency === "expired" ? "danger" : urgency === "soon" ? "saffron" : "neutral"}>
-              {urgency === "expired" ? "Expired" : "Expires"} {formatDate(item.expiration_date)}
-            </Badge>
+            <Badge tone={expiryBadge.tone}>{expiryBadge.label}</Badge>
             {item.is_damaged && <Badge tone="danger">Damaged</Badge>}
             {item.requires_human_review && <Badge tone="danger">Needs review</Badge>}
-            <Badge tone="neutral">×{item.quantity} in stock</Badge>
+            <Badge
+              tone={item.quantity === 0 ? "danger" : "neutral"}
+              className={item.quantity === 0 ? "animate-pulse" : undefined}
+            >
+              {item.quantity === 0 ? "Out of stock" : `×${item.quantity} in stock`}
+            </Badge>
           </div>
         </div>
         {!isEditing && (
@@ -167,7 +171,7 @@ export function InventoryItemPage() {
           </Section>
 
           <Section title="Dietary flags">
-            <DietaryDetailList flags={dietary_flags} />
+            <DietaryDetailList flags={dietary_flags} fssaiSymbol={nutrition_facts.fssai_symbol_found} />
           </Section>
 
           <Section title="Nutrition facts">
@@ -191,7 +195,12 @@ export function InventoryItemPage() {
             )}
             <StatRow
               label="FSSAI symbol"
-              value={nutrition_facts.fssai_symbol_found.replace("_", " ")}
+              value={
+                <span className="flex items-center gap-2">
+                  <FssaiMark symbol={nutrition_facts.fssai_symbol_found} size={20} />
+                  {nutrition_facts.fssai_symbol_found.replace("_", " ")}
+                </span>
+              }
             />
           </Section>
 
@@ -204,11 +213,12 @@ export function InventoryItemPage() {
                 max={item.quantity}
                 value={checkoutQty}
                 onChange={(e) => setCheckoutQty(Number(e.target.value))}
-                className="w-24 rounded-lg border border-cream-300 bg-cream-100 px-3 py-2 text-sm focus:border-terracotta-400 focus:outline-none focus:ring-2 focus:ring-terracotta-300/40"
+                disabled={item.quantity === 0}
+                className="w-24 rounded-lg border border-cream-300 bg-cream-100 px-3 py-2 text-sm focus:border-terracotta-400 focus:outline-none focus:ring-2 focus:ring-terracotta-300/40 disabled:cursor-not-allowed disabled:opacity-50"
               />
               <button
                 onClick={handleCheckout}
-                disabled={checkingOut || checkoutQty <= 0 || checkoutQty > item.quantity}
+                disabled={checkingOut || item.quantity === 0 || checkoutQty <= 0 || checkoutQty > item.quantity}
                 className="inline-flex items-center gap-2 rounded-xl bg-terracotta-500 px-4 py-2 text-sm font-semibold text-cream-50 shadow-soft hover:bg-terracotta-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {checkingOut ? <Spinner size={15} /> : <PackageMinus size={15} />}
@@ -217,8 +227,11 @@ export function InventoryItemPage() {
             </div>
             <p className="mt-3 flex items-start gap-1.5 text-xs text-ink-700/60">
               <Info size={13} className="mt-0.5 shrink-0" />
-              Decrements stock when items are handed out to distribution. {item.quantity} unit
-              {item.quantity === 1 ? "" : "s"} currently on hand.
+              {item.quantity === 0
+                ? "Out of stock — nothing left to distribute."
+                : `Decrements stock when items are handed out to distribution. ${item.quantity} unit${
+                    item.quantity === 1 ? "" : "s"
+                  } currently on hand.`}
             </p>
           </Section>
 

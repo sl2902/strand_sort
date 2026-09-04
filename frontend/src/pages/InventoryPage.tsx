@@ -1,59 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Search, Boxes, PackageSearch } from "lucide-react";
+import { Search, Boxes, PackageSearch, LayoutGrid, ArrowDownWideNarrow } from "lucide-react";
 import clsx from "clsx";
 import { listInventory, ApiError } from "../lib/api";
 import { CATEGORIES, CATEGORY_LABELS, type DonationItem } from "../lib/types";
-import { DietaryBadgeRow } from "../components/DietaryBadges";
-import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
-import { ImageThumbnail } from "../components/ItemImages";
-import { formatDate, expiryUrgency } from "../lib/format";
+import { InventoryItemCard } from "../components/InventoryItemCard";
+import { byExpirationDateAscending } from "../lib/format";
 import { useToast } from "../components/Toast";
-
-function ItemCard({ item, onImageRetry }: { item: DonationItem; onImageRetry: () => void }) {
-  const urgency = expiryUrgency(item.expiration_date);
-  return (
-    <Link
-      to={`/inventory/${item.item_id}`}
-      className="group flex gap-3 rounded-2xl border border-cream-300 bg-cream-50 p-4 shadow-soft transition-all hover:-translate-y-0.5 hover:shadow-lift"
-    >
-      <ImageThumbnail
-        url={item.image_urls[0]}
-        images={item.image_urls}
-        alt={item.product_name}
-        onRetry={onImageRetry}
-        size="h-16 w-16 sm:h-20 sm:w-20"
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="font-display text-base font-semibold leading-snug text-ink-900 group-hover:text-terracotta-600">
-            {item.product_name}
-          </h3>
-          <span className="shrink-0 rounded-full bg-cream-200 px-2.5 py-1 text-xs font-bold text-ink-800">
-            ×{item.quantity}
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge
-            tone={urgency === "expired" ? "danger" : urgency === "soon" ? "saffron" : "neutral"}
-          >
-            {urgency === "expired" ? "Expired" : "Expires"} {formatDate(item.expiration_date)}
-          </Badge>
-          {item.requires_human_review && (
-            <Badge tone="danger">Needs review</Badge>
-          )}
-        </div>
-        <DietaryBadgeRow flags={item.dietary_flags} />
-      </div>
-    </Link>
-  );
-}
 
 export function InventoryPage() {
   const [items, setItems] = useState<DonationItem[] | null>(null);
   const [search, setSearch] = useState("");
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
+  const [sortMode, setSortMode] = useState<"category" | "expiry">("category");
   const { show } = useToast();
 
   const load = () => {
@@ -89,10 +48,12 @@ export function InventoryPage() {
       byCategory.set(item.category, bucket);
     }
     for (const bucket of byCategory.values()) {
-      bucket.sort((a, b) => (a.expiration_date ?? "9999").localeCompare(b.expiration_date ?? "9999"));
+      bucket.sort(byExpirationDateAscending);
     }
     return CATEGORIES.filter((c) => byCategory.has(c)).map((c) => ({ category: c, items: byCategory.get(c)! }));
   }, [filtered]);
+
+  const sortedByExpiry = useMemo(() => [...filtered].sort(byExpirationDateAscending), [filtered]);
 
   const presentCategories = useMemo(() => {
     if (!items) return [];
@@ -117,35 +78,63 @@ export function InventoryPage() {
             className="w-full rounded-xl border border-cream-300 bg-cream-50 py-2.5 pl-10 pr-4 text-sm focus:border-terracotta-400 focus:outline-none focus:ring-2 focus:ring-terracotta-300/40"
           />
         </div>
-        {presentCategories.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setActiveCategories(new Set())}
-              className={clsx(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                activeCategories.size === 0
-                  ? "border-terracotta-500 bg-terracotta-500 text-cream-50"
-                  : "border-cream-300 bg-cream-50 text-ink-700 hover:border-terracotta-300"
-              )}
-            >
-              All
-            </button>
-            {presentCategories.map((c) => (
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {presentCategories.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
               <button
-                key={c}
-                onClick={() => toggleCategory(c)}
+                onClick={() => setActiveCategories(new Set())}
                 className={clsx(
                   "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                  activeCategories.has(c)
+                  activeCategories.size === 0
                     ? "border-terracotta-500 bg-terracotta-500 text-cream-50"
                     : "border-cream-300 bg-cream-50 text-ink-700 hover:border-terracotta-300"
                 )}
               >
-                {CATEGORY_LABELS[c]}
+                All
               </button>
-            ))}
+              {presentCategories.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => toggleCategory(c)}
+                  className={clsx(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    activeCategories.has(c)
+                      ? "border-terracotta-500 bg-terracotta-500 text-cream-50"
+                      : "border-cream-300 bg-cream-50 text-ink-700 hover:border-terracotta-300"
+                  )}
+                >
+                  {CATEGORY_LABELS[c]}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div />
+          )}
+
+          <div className="inline-flex shrink-0 rounded-xl bg-cream-200/70 p-1 text-xs">
+            <button
+              onClick={() => setSortMode("category")}
+              className={clsx(
+                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors",
+                sortMode === "category" ? "bg-cream-50 text-ink-900 shadow-soft" : "text-ink-700/70 hover:text-ink-900"
+              )}
+            >
+              <LayoutGrid size={13} />
+              By category
+            </button>
+            <button
+              onClick={() => setSortMode("expiry")}
+              className={clsx(
+                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors",
+                sortMode === "expiry" ? "bg-cream-50 text-ink-900 shadow-soft" : "text-ink-700/70 hover:text-ink-900"
+              )}
+            >
+              <ArrowDownWideNarrow size={13} />
+              Soonest expiring
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
       {items === null && (
@@ -172,21 +161,31 @@ export function InventoryPage() {
         />
       )}
 
-      <div className="space-y-8">
-        {grouped.map(({ category, items: categoryItems }) => (
-          <section key={category} className="animate-fade-up">
-            <div className="mb-3 flex items-baseline gap-2">
-              <h2 className="font-display text-lg font-semibold text-ink-900">{CATEGORY_LABELS[category]}</h2>
-              <span className="text-xs text-ink-700/50">{categoryItems.length}</span>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {categoryItems.map((item) => (
-                <ItemCard key={item.item_id} item={item} onImageRetry={load} />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
+      {items !== null && filtered.length > 0 && sortMode === "expiry" && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {sortedByExpiry.map((item) => (
+            <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} />
+          ))}
+        </div>
+      )}
+
+      {items !== null && filtered.length > 0 && sortMode === "category" && (
+        <div className="space-y-8">
+          {grouped.map(({ category, items: categoryItems }) => (
+            <section key={category} className="animate-fade-up">
+              <div className="mb-3 flex items-baseline gap-2">
+                <h2 className="font-display text-lg font-semibold text-ink-900">{CATEGORY_LABELS[category]}</h2>
+                <span className="text-xs text-ink-700/50">{categoryItems.length}</span>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {categoryItems.map((item) => (
+                  <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

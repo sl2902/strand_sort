@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 import { Leaf, Sprout, WheatOff, Droplets, Candy, Beef } from "lucide-react";
-import type { DietaryFlags } from "../lib/types";
+import type { DietaryFlags, FssaiSymbol } from "../lib/types";
 import { Badge } from "./Badge";
 import { SourceDot } from "./SourceTag";
+import { FssaiMark } from "./FssaiMark";
 
 /** Compact at-a-glance row of dietary badges — used in list/card views. */
-export function DietaryBadgeRow({ flags }: { flags: DietaryFlags }) {
+export function DietaryBadgeRow({ flags, fssaiSymbol }: { flags: DietaryFlags; fssaiSymbol?: FssaiSymbol }) {
   const badges: { key: string; node: ReactNode }[] = [];
 
   if (flags.is_vegetarian === true) {
@@ -68,19 +69,22 @@ export function DietaryBadgeRow({ flags }: { flags: DietaryFlags }) {
     });
   }
 
-  if (badges.length === 0) {
+  const hasMark = !!fssaiSymbol && fssaiSymbol !== "none";
+
+  if (badges.length === 0 && !hasMark) {
     return <span className="text-xs text-ink-700/50 italic">No dietary info</span>;
   }
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {hasMark && <FssaiMark symbol={fssaiSymbol!} size={18} />}
       {badges.map((b) => b.node)}
     </div>
   );
 }
 
 /** Full dietary breakdown for the item detail view, each row tagged with its source. */
-export function DietaryDetailList({ flags }: { flags: DietaryFlags }) {
+export function DietaryDetailList({ flags, fssaiSymbol }: { flags: DietaryFlags; fssaiSymbol?: FssaiSymbol }) {
   const rows: { label: string; value: string; source: string; positive: boolean }[] = [
     {
       label: "Vegetarian",
@@ -120,6 +124,9 @@ export function DietaryDetailList({ flags }: { flags: DietaryFlags }) {
         <div key={row.label} className="flex items-center justify-between gap-3 py-2.5">
           <dt className="text-sm text-ink-700">{row.label}</dt>
           <dd className="flex items-center gap-2">
+            {row.label === "Vegetarian" && fssaiSymbol && fssaiSymbol !== "none" && (
+              <FssaiMark symbol={fssaiSymbol} size={20} />
+            )}
             <span className={`text-sm font-medium ${row.positive ? "text-success-600" : "text-ink-800"}`}>
               {row.value}
             </span>
