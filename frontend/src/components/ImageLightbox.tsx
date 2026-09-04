@@ -47,7 +47,17 @@ export function ImageLightbox({
   return createPortal(
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-ink-900/80 p-4 backdrop-blur-sm animate-fade-up"
-      onClick={onClose}
+      onClick={(e) => {
+        // This backdrop is the root of the portaled subtree — unlike every
+        // button below (shielded by the inner div's own stopPropagation), a
+        // click here has no DOM ancestor within the portal to catch it, so
+        // an unstopped click would cross the portal boundary and reach
+        // whatever this component is logically nested inside in the React
+        // tree (e.g. a card wrapped in a <Link>), triggering navigation
+        // just from dismissing the lightbox.
+        e.stopPropagation();
+        onClose();
+      }}
       role="dialog"
       aria-modal="true"
       aria-label={alt}

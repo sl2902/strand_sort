@@ -164,7 +164,7 @@ export function InventoryPage() {
       {items !== null && filtered.length > 0 && sortMode === "expiry" && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sortedByExpiry.map((item) => (
-            <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} />
+            <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} onDelete={load} />
           ))}
         </div>
       )}
@@ -179,7 +179,7 @@ export function InventoryPage() {
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {categoryItems.map((item) => (
-                  <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} />
+                  <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} onDelete={load} />
                 ))}
               </div>
             </section>

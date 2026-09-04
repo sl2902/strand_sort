@@ -62,7 +62,7 @@ export function ExpiringSoonPage() {
       {items !== null && urgent.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {urgent.map((item) => (
-            <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} />
+            <InventoryItemCard key={item.item_id} item={item} onImageRetry={load} onDelete={load} />
           ))}
         </div>
       )}

@@ -85,6 +85,12 @@ export function checkoutItem(itemId: string, quantity: number): Promise<Donation
   );
 }
 
+export function deleteItem(itemId: string): Promise<{ status: string; item_id: string }> {
+  return request<{ status: string; item_id: string }>(`/inventory/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+  });
+}
+
 // ---- Review queue ----
 
 export function listPendingReviews(): Promise<DonationItem[]> {

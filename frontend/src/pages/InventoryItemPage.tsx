@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Pencil, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
-import { getItem, updateItem, checkoutItem, ApiError } from "../lib/api";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Pencil, Trash2, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
+import { getItem, updateItem, checkoutItem, deleteItem, ApiError } from "../lib/api";
 import { CATEGORY_LABELS, type DonationItem } from "../lib/types";
 import { Badge } from "../components/Badge";
 import { DietaryDetailList } from "../components/DietaryBadges";
 import { SourceTag } from "../components/SourceTag";
 import { FssaiMark } from "../components/FssaiMark";
 import { ImageGallery } from "../components/ItemImages";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { formatDate, expiryBadgeContent } from "../lib/format";
 import { ItemEditForm } from "../components/ItemEditForm";
 import { Spinner } from "../components/Spinner";
@@ -33,6 +34,7 @@ function StatRow({ label, value }: { label: string; value: ReactNode }) {
 
 export function InventoryItemPage() {
   const { itemId } = useParams<{ itemId: string }>();
+  const navigate = useNavigate();
   const { show } = useToast();
 
   const [item, setItem] = useState<DonationItem | null>(null);
@@ -41,6 +43,8 @@ export function InventoryItemPage() {
   const [saving, setSaving] = useState(false);
   const [checkoutQty, setCheckoutQty] = useState(1);
   const [checkingOut, setCheckingOut] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = () => {
     if (!itemId) return;
@@ -81,6 +85,23 @@ export function InventoryItemPage() {
       show(err instanceof ApiError ? err.message : "Checkout failed.", "error");
     } finally {
       setCheckingOut(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!itemId) return;
+    setDeleting(true);
+    try {
+      await deleteItem(itemId);
+      show(`${item?.product_name ?? "Item"} deleted.`, "success");
+      // The item no longer exists — nothing to stay on this page for, and
+      // the Inventory list re-fetches on its own mount, so it won't show
+      // the deleted item stale.
+      navigate("/inventory");
+    } catch (err) {
+      show(err instanceof ApiError ? err.message : "Couldn't delete this item.", "error");
+      setDeleting(false);
+      setConfirmingDelete(false);
     }
   };
 
@@ -132,15 +153,35 @@ export function InventoryItemPage() {
           </div>
         </div>
         {!isEditing && (
-          <button
-            onClick={() => setIsEditing(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-cream-300 bg-cream-50 px-4 py-2 text-sm font-medium text-ink-800 shadow-soft hover:bg-cream-100"
-          >
-            <Pencil size={15} />
-            Edit
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsEditing(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-cream-300 bg-cream-50 px-4 py-2 text-sm font-medium text-ink-800 shadow-soft hover:bg-cream-100"
+            >
+              <Pencil size={15} />
+              Edit
+            </button>
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-danger-400/50 bg-danger-100/60 px-4 py-2 text-sm font-medium text-danger-600 shadow-soft hover:bg-danger-100"
+            >
+              <Trash2 size={15} />
+              Delete
+            </button>
+          </div>
         )}
       </div>
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title={`Delete ${item.product_name}?`}
+          description="This can't be undone — the item and its record will be permanently removed from inventory."
+          confirmLabel="Delete"
+          isConfirming={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
 
       {item.requires_human_review && item.review_reason && (
         <div className="flex items-start gap-2 rounded-2xl border border-saffron-400/50 bg-saffron-100/70 px-4 py-3 text-sm text-saffron-700">
