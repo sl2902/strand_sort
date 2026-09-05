@@ -17,6 +17,7 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
     "python-multipart>=0.0.32",
+    "mangum>=0.22.0",
 ]
 
 [dependency-groups]

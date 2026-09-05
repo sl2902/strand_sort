@@ -1,13 +1,17 @@
 import base64
+import json
+import os
 import uuid
 import hashlib
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from typing import Literal
 
 import boto3
 import botocore.exceptions
 from google import genai
 from google.genai import types
+from google.oauth2 import service_account
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -79,6 +83,36 @@ Return ONLY valid JSON matching the requested schema.
 
 LOW_SUGAR_THRESHOLD_G = 5.0       # per 100g/serving, matching the system prompt's own stated rule
 LOW_SODIUM_THRESHOLD_MG = 140.0   # per serving, matching the system prompt's own stated rule
+
+
+def _running_on_lambda() -> bool:
+    """AWS sets this in every Lambda execution environment automatically;
+    it's never present locally. Decides whether Gemini/Vertex auth comes
+    from Secrets Manager (Lambda has no `gcloud auth application-default
+    login` credentials file) or ADC (local dev, unchanged)."""
+    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+
+@lru_cache(maxsize=1)
+def _get_gcp_credentials_dict() -> dict:
+    """Fetched once per Lambda execution environment — lru_cache persists
+    for the container's lifetime (reused across invocations), not just a
+    single request. Secrets Manager calls have real latency/cost that
+    shouldn't be paid on every invocation."""
+    client = boto3.client("secretsmanager", region_name=settings.aws_region)
+    response = client.get_secret_value(SecretId=settings.gcp_secrets_manager_secret_id)
+    return json.loads(response["SecretString"])
+
+
+@lru_cache(maxsize=1)
+def _get_gcp_credentials() -> service_account.Credentials:
+    """Also cached: a Credentials object holds a signer built from the
+    private key and manages its own token refresh — worth reusing rather
+    than reconstructing on every Gemini call within the same container."""
+    return service_account.Credentials.from_service_account_info(
+        _get_gcp_credentials_dict(),
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
 
 
 def _recompute_low_sugar(nf: NutritionFacts) -> tuple[bool, str] | None:
@@ -224,11 +258,16 @@ class BedrockExtractor(VisionExtractor):
 
 class GeminiExtractor(VisionExtractor):
     def __init__(self, model_id: str | None = None):
-        self.client = genai.Client(
+        client_kwargs = dict(
             vertexai=True,
             project=settings.gcp_project_id,
             location=settings.gemini_location or settings.gcp_location,
         )
+        if _running_on_lambda():
+            # No ADC credentials file on Lambda — authenticate with the
+            # service account key from Secrets Manager instead.
+            client_kwargs["credentials"] = _get_gcp_credentials()
+        self.client = genai.Client(**client_kwargs)
         self.model_id = model_id or settings.gemini_model_id
 
     def _extract_raw(self, images_base64: list[str]) -> VisionExtraction:
