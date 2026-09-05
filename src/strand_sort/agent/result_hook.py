@@ -31,15 +31,31 @@ class ItemResultHook(HookProvider):
 
     def __init__(self):
         self.item: dict | None = None
+        # A tool call raising (e.g. commit_to_inventory hitting a
+        # ValidationException from a stale/wrong DynamoDB index name) used
+        # to just return here silently — no item ever gets captured, but
+        # nothing recorded WHY either, and the agent can still finish its
+        # turn "normally" from Python's perspective (the exception is a tool
+        # observation to the model, not a raised Python exception), so
+        # run_intake_workflow saw no exception AND no item: an empty
+        # summary with no indication anything went wrong. Recording it here
+        # lets run_intake_workflow surface it instead of staying silent.
+        self.tool_exception: Exception | None = None
 
     def register_hooks(self, registry: HookRegistry) -> None:
         registry.add_callback(AfterToolCallEvent, self._capture)
 
     def _capture(self, event: AfterToolCallEvent) -> None:
         tool_name = event.tool_use.get("name")
+        # Fires for every tool call, not just the two below — confirms
+        # whether the hook runs at all, and whether the tool call itself
+        # raised (the `if event.exception is not None: return` right after
+        # this returns completely silently otherwise, with zero log trace).
+        logger.info(f"ItemResultHook triggered | tool={tool_name} | exception={event.exception}")
         if tool_name not in ("scan_package_batch", "commit_to_inventory"):
             return
         if event.exception is not None:
+            self.tool_exception = event.exception
             return
 
         try:
@@ -49,10 +65,12 @@ class ItemResultHook(HookProvider):
             logger.warning(f"Could not parse {tool_name} result for item capture: {e}")
             return
 
+        item = result_data.get("item")
+        logger.info(f"ItemResultHook parsed item: {item is not None}")
+
         if tool_name == "scan_package_batch" and not result_data.get("needs_review"):
             return  # committed path — wait for commit_to_inventory's authoritative record
 
-        item = result_data.get("item")
         if item is not None:
             self.item = item
             event.agent.cancel()

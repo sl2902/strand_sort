@@ -3,6 +3,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from strand_sort.db.repository import get_inventory_repository
+from strand_sort.models import NO_EXPIRATION_DATE
 from strand_sort.storage.image_storage import resolve_image_urls
 from strand_sort.expiry import ExpiryStatus, compute_expiry_status
 
@@ -60,6 +61,12 @@ def checkout_item(item_id: str, quantity: int = 1) -> dict[str, Any]:
 @router.patch("/inventory/{item_id}")
 def update_item(item_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Corrects fields on an existing item — e.g. manually verified nutrition values."""
+    if "expiration_date" in updates and not updates["expiration_date"]:
+        # e.g. the item-edit form's "clear date" action sends None here.
+        # Never persist None/"" — DynamoDB's expiration_date GSI range key
+        # rejects both outright (see NO_EXPIRATION_DATE in models.py).
+        updates["expiration_date"] = NO_EXPIRATION_DATE
+
     repo = get_inventory_repository()
     try:
         return repo.update_item(item_id, updates)

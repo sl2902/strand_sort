@@ -6,6 +6,19 @@ from enum import Enum
 
 from strand_sort.expiry import ExpiryStatus
 
+# A real, non-null, non-empty string sentinel for "no expiration date found
+# on the package" — never store None or "" for expiration_date. DynamoDB's
+# ProductNameExpirationIndex GSI has expiration_date as its RANGE key, which rejects
+# both a null value AND an empty string outright (ValidationException); a
+# missing attribute doesn't crash the write but silently drops the item
+# from that index (invisible to search_by_name/check_duplicate_active_
+# inventory). One consistent string sentinel, defined once here and used
+# everywhere, avoids all three failure modes. Deliberately not something
+# that could parse as a real date (e.g. "9999-12-31") — compute_expiry_status
+# and every date-parsing call site must be able to reject it outright as
+# "not a date" rather than silently succeeding with a nonsense value.
+NO_EXPIRATION_DATE = "no-date"
+
 
 class Category(str, Enum):
     CANNED_PROTEIN = "canned_protein"       # canned meat, beans, tuna
@@ -59,7 +72,11 @@ class DonationItem(BaseModel):
     product_name: str = Field(..., description="Name and brand of the item")
     category: Category
     raw_date_text_found: str = Field(description="Forces OCR attention step")
-    expiration_date: Optional[str] = Field(None, description="Extracted date string YYYY-MM-DD if present")
+    expiration_date: Optional[str] = Field(
+        NO_EXPIRATION_DATE,
+        description=f"Extracted date string YYYY-MM-DD if present, else the {NO_EXPIRATION_DATE!r} sentinel — "
+        "never None/empty, both of which DynamoDB's expiration_date GSI range key rejects",
+    )
     date_confidence: Literal["high", "low"] | None = Field(None, description="Categorise confidence in date extraction") 
     is_expired: bool = Field(False, description="True if past safety threshold — recomputed on every API read, never trust a stored value")
     expiry_status: Optional[ExpiryStatus] = Field(

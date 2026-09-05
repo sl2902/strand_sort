@@ -1,23 +1,21 @@
 import base64
-import json
-import os
 import uuid
 import hashlib
 from abc import ABC, abstractmethod
-from functools import lru_cache
 from typing import Literal
 
 import boto3
 import botocore.exceptions
 from google import genai
 from google.genai import types
-from google.oauth2 import service_account
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from strand_sort.config import settings, BEDROCK_FALLBACK_ERROR_CODES
 from strand_sort.expiry import ExpiryStatus, compute_expiry_status
+from strand_sort.gcp_auth import running_on_lambda, get_gcp_credentials
 from strand_sort.models import (
+    NO_EXPIRATION_DATE,
     Category,
     DonationItem,
     VisionExtraction,
@@ -83,36 +81,6 @@ Return ONLY valid JSON matching the requested schema.
 
 LOW_SUGAR_THRESHOLD_G = 5.0       # per 100g/serving, matching the system prompt's own stated rule
 LOW_SODIUM_THRESHOLD_MG = 140.0   # per serving, matching the system prompt's own stated rule
-
-
-def _running_on_lambda() -> bool:
-    """AWS sets this in every Lambda execution environment automatically;
-    it's never present locally. Decides whether Gemini/Vertex auth comes
-    from Secrets Manager (Lambda has no `gcloud auth application-default
-    login` credentials file) or ADC (local dev, unchanged)."""
-    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-
-
-@lru_cache(maxsize=1)
-def _get_gcp_credentials_dict() -> dict:
-    """Fetched once per Lambda execution environment — lru_cache persists
-    for the container's lifetime (reused across invocations), not just a
-    single request. Secrets Manager calls have real latency/cost that
-    shouldn't be paid on every invocation."""
-    client = boto3.client("secretsmanager", region_name=settings.aws_region)
-    response = client.get_secret_value(SecretId=settings.gcp_secrets_manager_secret_id)
-    return json.loads(response["SecretString"])
-
-
-@lru_cache(maxsize=1)
-def _get_gcp_credentials() -> service_account.Credentials:
-    """Also cached: a Credentials object holds a signer built from the
-    private key and manages its own token refresh — worth reusing rather
-    than reconstructing on every Gemini call within the same container."""
-    return service_account.Credentials.from_service_account_info(
-        _get_gcp_credentials_dict(),
-        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-    )
 
 
 def _recompute_low_sugar(nf: NutritionFacts) -> tuple[bool, str] | None:
@@ -205,7 +173,11 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
         product_name=result.product_name,
         category=result.category,
         raw_date_text_found=raw_text or "NONE",
-        expiration_date=expiration_date_raw,
+        # Never store None/"" here — DynamoDB's expiration_date GSI range key
+        # rejects both outright. expiration_date_raw stays None internally
+        # above (is_expired/expiry_status/logging all correctly treat that
+        # as "no date"); only the final stored value needs the sentinel.
+        expiration_date=expiration_date_raw or NO_EXPIRATION_DATE,
         date_confidence=result.date_confidence,
         is_expired=is_expired,
         expiry_status=intake_expiry_status,
@@ -224,7 +196,16 @@ class VisionExtractor(ABC):
 
     def extract(self, images_base64: list[str]) -> DonationItem:
         raw = self._extract_raw(images_base64)
-        return _to_donation_item(raw)
+        item = _to_donation_item(raw)
+        # Covers every get_extractor() branch (forced Bedrock/Gemini, and
+        # both legs of the auto-mode fallback) — all of them funnel through
+        # this single extract() method. Confirms extraction actually
+        # finished and produced a DonationItem, before it's handed back to
+        # the calling tool (scan_package_batch).
+        logger.info(
+            f"Extraction complete | product={item.product_name} | requires_review={item.requires_human_review}"
+        )
+        return item
 
 
 class BedrockExtractor(VisionExtractor):
@@ -263,10 +244,13 @@ class GeminiExtractor(VisionExtractor):
             project=settings.gcp_project_id,
             location=settings.gemini_location or settings.gcp_location,
         )
-        if _running_on_lambda():
+        if running_on_lambda():
             # No ADC credentials file on Lambda — authenticate with the
             # service account key from Secrets Manager instead.
-            client_kwargs["credentials"] = _get_gcp_credentials()
+            logger.info("Using Secrets-Manager-sourced GCP credentials (Lambda)")
+            client_kwargs["credentials"] = get_gcp_credentials()
+        else:
+            logger.info("Using local ADC for GCP credentials")
         self.client = genai.Client(**client_kwargs)
         self.model_id = model_id or settings.gemini_model_id
 

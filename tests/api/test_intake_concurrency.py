@@ -47,7 +47,7 @@ async def test_slow_intake_does_not_block_other_requests():
             intake_task = asyncio.create_task(
                 client.post(
                     "/api/v1/intake",
-                    files=[("files", ("egg.jpg", b"fake-image-bytes", "image/jpeg"))],
+                    json={"s3_keys": ["pending-uploads/egg.jpg"]},
                 )
             )
             await asyncio.sleep(0.05)  # let the intake request start before racing it

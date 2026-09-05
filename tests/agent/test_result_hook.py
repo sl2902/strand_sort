@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from strand_sort.agent.result_hook import ItemResultHook
 
@@ -22,12 +22,26 @@ def test_ignores_unrelated_tool_calls():
     event.agent.cancel.assert_not_called()
 
 
-def test_ignores_calls_with_exceptions():
+def test_calls_with_exceptions_do_not_capture_an_item_but_record_the_exception():
+    """No item ever gets captured here (correct — the tool call failed, so
+    there's no result to trust), but the exception itself is recorded now,
+    not silently discarded: run_intake_workflow uses it to surface an
+    actual error message instead of an empty summary with no indication
+    anything went wrong."""
     hook = ItemResultHook()
-    event = _event("commit_to_inventory", {"item": {"item_id": "x"}}, exception=RuntimeError("boom"))
+    exc = RuntimeError("boom")
+    event = _event("commit_to_inventory", {"item": {"item_id": "x"}}, exception=exc)
     hook._capture(event)
     assert hook.item is None
+    assert hook.tool_exception is exc
     event.agent.cancel.assert_not_called()
+
+
+def test_exception_on_unrelated_tool_call_is_not_recorded():
+    hook = ItemResultHook()
+    event = _event("search_inventory", {"item": {"item_id": "x"}}, exception=RuntimeError("boom"))
+    hook._capture(event)
+    assert hook.tool_exception is None
 
 
 def test_captures_flagged_scan_package_batch_result_and_cancels():
@@ -89,3 +103,43 @@ def test_unparseable_result_is_ignored():
     hook._capture(bad_event)
     assert hook.item is None
     bad_event.agent.cancel.assert_not_called()
+
+
+class TestVisibilityLogging:
+    """Added to close a silent-failure gap: a request completed with no
+    exception anywhere and no indication of whether this hook fired, or
+    whether it fired but failed to parse a result — event.exception is not
+    None returns completely silently otherwise, with zero trace."""
+
+    @patch("strand_sort.agent.result_hook.logger")
+    def test_logs_triggered_for_every_tool_call_including_unrelated_ones(self, mock_logger):
+        hook = ItemResultHook()
+        hook._capture(_event("search_inventory", {"item": {"item_id": "x"}}))
+
+        logged = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any("triggered" in msg and "search_inventory" in msg for msg in logged)
+
+    @patch("strand_sort.agent.result_hook.logger")
+    def test_logs_triggered_even_when_the_tool_call_raised(self, mock_logger):
+        hook = ItemResultHook()
+        hook._capture(_event("commit_to_inventory", {"item": {"item_id": "x"}}, exception=RuntimeError("boom")))
+
+        logged = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any("triggered" in msg and "commit_to_inventory" in msg for msg in logged)
+
+    @patch("strand_sort.agent.result_hook.logger")
+    def test_logs_parsed_item_true_when_item_captured(self, mock_logger):
+        hook = ItemResultHook()
+        flagged_item = {"item_id": "abc", "requires_human_review": True}
+        hook._capture(_event("scan_package_batch", {"needs_review": True, "item": flagged_item}))
+
+        logged = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any("parsed item: True" in msg for msg in logged)
+
+    @patch("strand_sort.agent.result_hook.logger")
+    def test_logs_parsed_item_false_when_item_key_missing(self, mock_logger):
+        hook = ItemResultHook()
+        hook._capture(_event("commit_to_inventory", {"status": "quantity_updated"}))  # no "item" key
+
+        logged = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any("parsed item: False" in msg for msg in logged)

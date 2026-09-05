@@ -2,6 +2,7 @@ import os
 import sqlite3
 import pytest
 import boto3
+import botocore.exceptions
 from decimal import Decimal
 from moto import mock_aws
 
@@ -10,6 +11,7 @@ from strand_sort.db.repository import (
     DynamoDBRepository,
     get_inventory_repository,
 )
+from strand_sort.models import NO_EXPIRATION_DATE
 
 
 @pytest.fixture
@@ -127,12 +129,28 @@ class TestDynamoDBRepository:
                 AttributeDefinitions=[
                     {"AttributeName": "item_id", "AttributeType": "S"},
                     {"AttributeName": "product_name", "AttributeType": "S"},
+                    {"AttributeName": "expiration_date", "AttributeType": "S"},
                     {"AttributeName": "idempotency_key", "AttributeType": "S"},
                 ],
                 GlobalSecondaryIndexes=[
                     {
-                        "IndexName": "ProductNameIndex",
-                        "KeySchema": [{"AttributeName": "product_name", "KeyType": "HASH"}],
+                        # Name AND key schema confirmed directly against the
+                        # real table (`aws dynamodb describe-table`) —
+                        # ProductNameExpirationIndex, product_name HASH +
+                        # expiration_date RANGE. Previously this fixture
+                        # used the right key schema but an invented index
+                        # name ("ProductNameIndex") that didn't match the
+                        # real table at all — repository.py's queries
+                        # against that made-up name still "worked" here
+                        # (self-consistently wrong) without ever catching
+                        # the actual ValidationException the real table
+                        # raised in production. Don't rename this again
+                        # without re-checking the real table.
+                        "IndexName": "ProductNameExpirationIndex",
+                        "KeySchema": [
+                            {"AttributeName": "product_name", "KeyType": "HASH"},
+                            {"AttributeName": "expiration_date", "KeyType": "RANGE"},
+                        ],
                         "Projection": {"ProjectionType": "ALL"},
                     },
                     {
@@ -187,6 +205,75 @@ class TestDynamoDBRepository:
         dynamo_repo.save_item(sample_item)
         updated = dynamo_repo.decrement_quantity(sample_item["item_id"], qty_to_remove=2)
         assert updated["quantity"] == 3
+
+
+class TestDynamoDBNoExpirationDate:
+    """ProductNameExpirationIndex's expiration_date RANGE key is a hard
+    DynamoDB constraint — a null value or missing attribute makes the whole
+    put_item/update_item call fail (or, for a missing attribute, silently
+    drops the item from the index instead of raising — still a real bug,
+    just a quieter one, since it becomes invisible to search_by_name/
+    check_duplicate_active_inventory). NO_EXPIRATION_DATE is the fix: a
+    real, always-present string, never None/absent."""
+
+    @pytest.fixture
+    def dynamodb_table(self):
+        with mock_aws():
+            os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+            dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+            table = dynamodb.create_table(
+                TableName="foodbank_inventory_no_date_test",
+                KeySchema=[{"AttributeName": "item_id", "KeyType": "HASH"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "item_id", "AttributeType": "S"},
+                    {"AttributeName": "product_name", "AttributeType": "S"},
+                    {"AttributeName": "expiration_date", "AttributeType": "S"},
+                ],
+                GlobalSecondaryIndexes=[
+                    {
+                        # Name confirmed via `aws dynamodb describe-table`.
+                        "IndexName": "ProductNameExpirationIndex",
+                        "KeySchema": [
+                            {"AttributeName": "product_name", "KeyType": "HASH"},
+                            {"AttributeName": "expiration_date", "KeyType": "RANGE"},
+                        ],
+                        "Projection": {"ProjectionType": "ALL"},
+                    },
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            yield table
+
+    @pytest.fixture
+    def dynamo_repo(self, dynamodb_table):
+        return DynamoDBRepository(table_name="foodbank_inventory_no_date_test")
+
+    def test_expiration_date_none_is_rejected_by_the_real_constraint(self, dynamo_repo, sample_item):
+        """Proves the fixture's GSI schema actually reproduces the reported
+        bug (confirms the test below is meaningful, not a false-positive
+        pass against a mock that doesn't enforce the real constraint)."""
+        item = dict(sample_item, item_id="broken-item", expiration_date=None)
+        with pytest.raises(botocore.exceptions.ClientError, match="ValidationException"):
+            dynamo_repo.save_item(item)
+
+    def test_sentinel_saves_successfully_and_round_trips(self, dynamo_repo, sample_item):
+        item = dict(sample_item, item_id="no-date-item", expiration_date=NO_EXPIRATION_DATE)
+
+        dynamo_repo.save_item(item)  # must not raise
+
+        fetched = dynamo_repo.get_by_id("no-date-item")
+        assert fetched["expiration_date"] == NO_EXPIRATION_DATE
+
+    def test_sentinel_items_are_still_findable_via_the_gsi(self, dynamo_repo, sample_item):
+        """Confirms the item isn't silently dropped from
+        ProductNameExpirationIndex — the quieter failure mode from an
+        absent (not null) attribute."""
+        item = dict(sample_item, item_id="no-date-item", expiration_date=NO_EXPIRATION_DATE)
+        dynamo_repo.save_item(item)
+
+        results = dynamo_repo.search_by_name("Organic Milk")
+        assert len(results) == 1
+        assert results[0]["expiration_date"] == NO_EXPIRATION_DATE
 
 
 # ============================================================================

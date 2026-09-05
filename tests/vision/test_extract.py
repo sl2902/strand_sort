@@ -1,5 +1,8 @@
-from strand_sort.models import DietaryFlags, NutritionFacts, VisionExtraction
+from unittest.mock import patch
+
+from strand_sort.models import NO_EXPIRATION_DATE, DietaryFlags, NutritionFacts, VisionExtraction
 from strand_sort.vision.extract import (
+    VisionExtractor,
     _recompute_low_sodium,
     _recompute_low_sugar,
     _to_donation_item,
@@ -186,3 +189,67 @@ class TestNoDateSentinelDoesNotCrash:
         )
         item = _to_donation_item(result)
         assert item.raw_date_text_found == "23/01/2027"
+
+    def test_no_date_expiration_date_is_the_sentinel_not_none(self):
+        """DynamoDB's expiration_date GSI range key rejects both a null
+        value and a missing attribute outright — expiration_date must never
+        be Python None on a DonationItem that reaches the repository layer,
+        or save_item raises ValidationException and the item is silently
+        lost (not committed, not sent to review)."""
+        result = _vision_extraction(
+            raw_date_text_found="NONE",
+            expiration_date_raw=None,
+            date_confidence="low",
+        )
+        item = _to_donation_item(result)
+        assert item.expiration_date == NO_EXPIRATION_DATE
+        assert item.expiration_date is not None
+
+    def test_no_date_item_is_not_marked_expired(self):
+        """The sentinel must never be mistaken for an expired real date —
+        is_expired/expiry_status must come out exactly as they did when
+        expiration_date was None."""
+        result = _vision_extraction(
+            raw_date_text_found="NONE",
+            expiration_date_raw=None,
+            date_confidence="low",
+        )
+        item = _to_donation_item(result)
+        assert item.is_expired is False
+        assert item.expiry_status is None
+
+
+class _FakeExtractor(VisionExtractor):
+    """Minimal concrete VisionExtractor, no real Bedrock/Gemini client —
+    exercises the shared extract() method (where the new "Extraction
+    complete" log line lives) without a network call."""
+
+    def __init__(self, raw: VisionExtraction):
+        self._raw = raw
+
+    def _extract_raw(self, images_base64):
+        return self._raw
+
+
+class TestExtractionCompleteLogging:
+    """Closes a gap where a request completed with no exception anywhere
+    but no indication of whether extraction itself ever finished — this
+    covers every get_extractor() branch (forced Bedrock/Gemini, both legs
+    of auto-mode fallback), since all of them funnel through this one
+    extract() method."""
+
+    @patch("strand_sort.vision.extract.logger")
+    def test_logs_product_name_and_requires_review_on_success(self, mock_logger):
+        raw = _vision_extraction(
+            product_name="10on10 Whole Wheat Atta",
+            raw_date_text_found="23/01/2027",
+            expiration_date_raw="2027-01-23",
+            date_confidence="high",
+        )
+        _FakeExtractor(raw).extract(["ZmFrZQ=="])
+
+        logged = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any(
+            "Extraction complete" in msg and "10on10 Whole Wheat Atta" in msg and "requires_review=False" in msg
+            for msg in logged
+        )

@@ -45,6 +45,25 @@ class TestLocalImageStorage:
         storage = LocalImageStorage(base_path=str(tmp_path))
         assert storage.resolve_urls([]) == []
 
+    @mock_aws
+    def test_save_images_from_s3_downloads_pending_uploads(self, tmp_path, monkeypatch):
+        """Valid combination: presigned uploads always land in S3 (see
+        storage/pending_uploads.py), but this dev setup keeps final image
+        storage on local disk — save_images_from_s3 has to bridge the two."""
+        from strand_sort.config import settings
+
+        bucket = "test-foodbank-pending"
+        monkeypatch.setattr(settings, "s3_bucket_name", bucket)
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="pending-uploads/abc.jpg", Body=b"pending-bytes")
+
+        storage = LocalImageStorage(base_path=str(tmp_path / "store"))
+        urls = storage.save_images_from_s3("item-123", ["pending-uploads/abc.jpg"])
+
+        assert urls == ["/images/item-123/0.jpg"]
+        assert (tmp_path / "store" / "item-123" / "0.jpg").read_bytes() == b"pending-bytes"
+
 
 class TestResolveLocalStoragePath:
     """A relative configured path (the default, "data/raw") must always
@@ -127,6 +146,25 @@ class TestS3ImageStorage:
 
         obj = s3.get_object(Bucket=bucket, Key="item-123/0.jpg")
         assert obj["Body"].read() == b"fake-jpeg-bytes"
+
+    @mock_aws
+    def test_save_images_from_s3_copies_within_the_bucket(self):
+        """Server-side copy_object — no bytes should flow through this
+        process for the S3-to-S3 case."""
+        bucket = "test-foodbank-images"
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="pending-uploads/abc.jpg", Body=b"pending-bytes")
+
+        storage = S3ImageStorage(bucket_name=bucket, region="us-east-1")
+        keys = storage.save_images_from_s3("item-123", ["pending-uploads/abc.jpg"])
+
+        assert keys == ["item-123/0.jpg"]
+        obj = s3.get_object(Bucket=bucket, Key="item-123/0.jpg")
+        assert obj["Body"].read() == b"pending-bytes"
+        # The pending source is left in place — cleanup is a follow-up
+        # lifecycle rule, not this method's job.
+        assert s3.get_object(Bucket=bucket, Key="pending-uploads/abc.jpg")["Body"].read() == b"pending-bytes"
 
     @mock_aws
     def test_resolve_urls_generates_fresh_presigned_urls(self):

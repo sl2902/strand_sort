@@ -4,6 +4,7 @@ from pathlib import Path
 
 import boto3
 from strand_sort.config import settings
+from strand_sort.storage.pending_uploads import get_bytes as get_pending_upload_bytes
 
 # image_storage.py -> storage/ -> strand_sort/ -> src/ -> repo root. Anchored
 # to where this file lives on disk, not the process's cwd — a plain relative
@@ -39,6 +40,14 @@ class ImageStorage(ABC):
         result of this call — only the reference passed into it"""
         pass
 
+    @abstractmethod
+    def save_images_from_s3(self, item_id: str, pending_keys: list[str]) -> list[str]:
+        """Same contract as save_images, but the source images already live
+        in S3 under pending-uploads/ (the presigned browser-upload flow) —
+        used when scan_package_batch's image_sources are S3 keys rather than
+        local file paths."""
+        pass
+
 
 class LocalImageStorage(ImageStorage):
     def __init__(self, base_path: str | None = None):
@@ -62,6 +71,21 @@ class LocalImageStorage(ImageStorage):
     def resolve_urls(self, refs: list[str]) -> list[str]:
         # Local URLs are already final and don't expire — nothing to refresh.
         return list(refs)
+
+    def save_images_from_s3(self, item_id: str, pending_keys: list[str]) -> list[str]:
+        """Downloads each pending-uploads/ object and stores it locally — a
+        valid combination when the presigned-upload bucket is real S3 but
+        final image storage stays on local disk for dev convenience."""
+        item_dir = self.base_path / item_id
+        item_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_urls = []
+        for i, pending_key in enumerate(pending_keys):
+            ext = Path(pending_key).suffix or ".jpg"
+            dest = item_dir / f"{i}{ext}"
+            dest.write_bytes(get_pending_upload_bytes(pending_key))
+            saved_urls.append(f"/images/{item_id}/{dest.name}")
+        return saved_urls
 
 
 class S3ImageStorage(ImageStorage):
@@ -95,6 +119,23 @@ class S3ImageStorage(ImageStorage):
             )
             for key in refs
         ]
+
+    def save_images_from_s3(self, item_id: str, pending_keys: list[str]) -> list[str]:
+        """Server-side copy from pending-uploads/ to this item's real image
+        location — no bytes flow through this process. Leaves the pending
+        source object in place; cleanup is a follow-up S3 lifecycle rule,
+        not handled here (see storage/pending_uploads.py's module docstring)."""
+        keys = []
+        for i, pending_key in enumerate(pending_keys):
+            ext = Path(pending_key).suffix or ".jpg"
+            dest_key = f"{item_id}/{i}{ext}"
+            self.s3.copy_object(
+                Bucket=self.bucket_name,
+                CopySource={"Bucket": self.bucket_name, "Key": pending_key},
+                Key=dest_key,
+            )
+            keys.append(dest_key)
+        return keys
 
 
 def get_image_storage() -> ImageStorage:

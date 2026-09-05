@@ -280,12 +280,17 @@ class DynamoDBRepository(InventoryRepository):
 
     def search_by_name(self, product_name: str) -> list[dict[str, Any]]:
         """
-        Uses a Global Secondary Index (ProductNameIndex) for exact/prefix matches.
+        Uses a Global Secondary Index (ProductNameExpirationIndex, composite
+        product_name HASH + expiration_date RANGE) for exact/prefix matches.
+        Querying with only the HASH key condition is valid DynamoDB
+        behavior on a composite-key index — returns every item sharing that
+        product_name regardless of expiration_date, which is what this
+        method's callers (search_inventory tool, GET /inventory?name=) want.
         Falls back to Attr().contains() Scan if partial matching across values is needed
         """
         # Search via GSI for exact or begins_with product name
         response = self.table.query(
-            IndexName="ProductNameIndex",
+            IndexName="ProductNameExpirationIndex",
             KeyConditionExpression=Key("product_name").eq(product_name)
         )
         items = response.get("Items", [])
@@ -309,14 +314,18 @@ class DynamoDBRepository(InventoryRepository):
         return items[0] if items else None
 
     def check_duplicate_active_inventory(self, product_name: str, expiration_date: str) -> Optional[dict[str, Any]]:
-        # Pending-review rows share this table now — exclude them from
-        # "active inventory" matches. not_exists() covers rows saved before
-        # this attribute was consistently present.
+        # ProductNameExpirationIndex is a composite key (product_name HASH +
+        # expiration_date RANGE) — both belong in KeyConditionExpression,
+        # not a FilterExpression, now that the index actually has a range
+        # key to match against. requires_human_review isn't part of the key
+        # schema, so it stays a filter: pending-review rows share this table
+        # now and must be excluded from "active inventory" matches.
+        # not_exists() covers rows saved before this attribute was
+        # consistently present.
         response = self.table.query(
-            IndexName="ProductNameIndex",
-            KeyConditionExpression=Key("product_name").eq(product_name),
-            FilterExpression=Attr("expiration_date").eq(expiration_date)
-            & (Attr("requires_human_review").eq(False) | Attr("requires_human_review").not_exists())
+            IndexName="ProductNameExpirationIndex",
+            KeyConditionExpression=Key("product_name").eq(product_name) & Key("expiration_date").eq(expiration_date),
+            FilterExpression=Attr("requires_human_review").eq(False) | Attr("requires_human_review").not_exists()
         )
         items = response.get("Items", [])
         return items[0] if items else None

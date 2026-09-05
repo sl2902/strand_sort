@@ -8,6 +8,7 @@ import botocore.exceptions
 from loguru import logger
 
 from strand_sort.config import settings, BEDROCK_FALLBACK_ERROR_CODES
+from strand_sort.gcp_auth import running_on_lambda, get_gcp_credentials
 from strand_sort.agent.tools import (
     scan_package_batch,
     commit_to_inventory,
@@ -38,12 +39,23 @@ def _bedrock_model() -> BedrockModel:
 
 
 def _gemini_model() -> GeminiModel:
+    client_args = {
+        "vertexai": True,
+        "project": settings.gcp_project_id,
+        "location": settings.gemini_location or settings.gcp_location,
+    }
+    if running_on_lambda():
+        # No ADC credentials file on Lambda — same fix as GeminiExtractor
+        # (vision/extract.py), needed here too since this is a SEPARATE
+        # genai.Client construction (the agent's own reasoning fallback,
+        # distinct from the one inside get_extractor).
+        logger.info("Using Secrets-Manager-sourced GCP credentials (Lambda)")
+        client_args["credentials"] = get_gcp_credentials()
+    else:
+        logger.info("Using local ADC for GCP credentials")
+
     return GeminiModel(
-        client_args={
-            "vertexai": True,
-            "project": settings.gcp_project_id,
-            "location": settings.gemini_location or settings.gcp_location,
-        },
+        client_args=client_args,
         model_id=settings.gemini_model_id,
         params={"temperature": 0},
     )
@@ -106,7 +118,7 @@ def format_intake_summary(item: dict[str, Any]) -> str:
     return sentence
 
 
-def run_intake_workflow(image_paths: list[str], hooks: list | None = None) -> tuple[str, dict | None]:
+def run_intake_workflow(image_sources: list[str], hooks: list | None = None) -> tuple[str, dict | None]:
     """
     Runs the intake agent and returns (summary_text, item) — item is the full
     DonationItem dict for whichever outcome actually happened (flagged or
@@ -123,8 +135,8 @@ def run_intake_workflow(image_paths: list[str], hooks: list | None = None) -> tu
     which case item is None.
     """
     prompt = (
-        f"Process this incoming package's images for intake using these file paths: "
-        f"{image_paths}"
+        f"Process this incoming package's images for intake using these S3 keys: "
+        f"{image_sources}"
     )
     item_hook = ItemResultHook()
     agent_hooks = [*(hooks or []), item_hook]
@@ -146,8 +158,20 @@ def run_intake_workflow(image_paths: list[str], hooks: list | None = None) -> tu
         response = agent(prompt)
 
     if item_hook.item is not None:
+        logger.info("Using templated summary from captured item")
         return format_intake_summary(item_hook.item), item_hook.item
 
+    if item_hook.tool_exception is not None:
+        # The tool call itself raised (e.g. a DynamoDB ValidationException) —
+        # the agent framework treats that as a tool observation, not a
+        # raised Python exception, so this path completes "normally" with no
+        # item ever settled. Surfacing the actual error here is what makes
+        # this class of infrastructure failure visible to whoever's staring
+        # at the Scan page, instead of only in CloudWatch.
+        logger.warning(f"Tool call raised, no item captured: {item_hook.tool_exception}")
+        return f"Processing failed: {item_hook.tool_exception}", None
+
+    logger.warning("No item captured by hook — falling back to raw agent response text")
     text_parts = [
         block["text"]
         for block in response.message.get("content", [])
