@@ -7,7 +7,7 @@ import { Badge } from "../Badge";
 import { DietaryBadgeRow } from "../DietaryBadges";
 import { Spinner } from "../Spinner";
 import { ImageGallery } from "../ItemImages";
-import { formatDate } from "../../lib/format";
+import { formatDate, NO_EXPIRATION_DATE } from "../../lib/format";
 
 export function ReviewItemCard({
   item,
@@ -25,7 +25,12 @@ export function ReviewItemCard({
   onImageRetry: () => void;
 }) {
   const [correctingDate, setCorrectingDate] = useState(false);
-  const [correctedDate, setCorrectedDate] = useState(item.expiration_date ?? "");
+  // Pre-fill the correction input with the real date if there is one — but
+  // not with the "no date on package" sentinel, which isn't a valid date
+  // for the volunteer to see or resubmit unchanged.
+  const [correctedDate, setCorrectedDate] = useState(
+    item.expiration_date && item.expiration_date !== NO_EXPIRATION_DATE ? item.expiration_date : ""
+  );
   const [showNotes, setShowNotes] = useState(false);
   const [notes, setNotes] = useState("");
   const [confirmingReject, setConfirmingReject] = useState(false);

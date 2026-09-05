@@ -1,7 +1,16 @@
 import type { ExpiryStatus } from "./types";
 
+/**
+ * Must match strand_sort.models.NO_EXPIRATION_DATE exactly — the backend
+ * never stores None/"" for expiration_date (DynamoDB's GSI range key
+ * rejects both), using this string sentinel instead for "no date found on
+ * the package." Every display of expiration_date needs to recognize it,
+ * or it leaks to the UI as the literal string "no-date".
+ */
+export const NO_EXPIRATION_DATE = "no-date";
+
 export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "Unknown";
+  if (!iso || iso === NO_EXPIRATION_DATE) return "No date on package";
   const parsed = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return iso;
   return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -28,7 +37,8 @@ export function expiryBadgeContent(
 
 /** Soonest-expiring first; items with no date sink to the bottom. */
 export function byExpirationDateAscending<T extends { expiration_date: string | null }>(a: T, b: T): number {
-  return (a.expiration_date ?? "9999").localeCompare(b.expiration_date ?? "9999");
+  const sortKey = (d: string | null) => (!d || d === NO_EXPIRATION_DATE ? "9999" : d);
+  return sortKey(a.expiration_date).localeCompare(sortKey(b.expiration_date));
 }
 
 export function daysUntil(iso: string | null | undefined): number | null {

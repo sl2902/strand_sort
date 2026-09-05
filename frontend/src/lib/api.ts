@@ -44,19 +44,57 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ---- Intake ----
 
-export function intakeImage(files: File[] | Blob[], filenamePrefix = "photo"): Promise<IntakeResponse> {
-  const form = new FormData();
-  files.forEach((file, i) => {
-    const name = file instanceof File ? file.name : `${filenamePrefix}-${i}.jpg`;
-    form.append("files", file, name);
-  });
-  return request<IntakeResponse>("/intake", { method: "POST", body: form });
+interface PresignedUpload {
+  s3_key: string;
+  upload_url: string;
 }
 
-export function intakeVideo(file: File | Blob, filename = "clip.webm"): Promise<IntakeResponse> {
-  const form = new FormData();
-  form.append("file", file, filename);
-  return request<IntakeResponse>("/intake/video", { method: "POST", body: form });
+/**
+ * Uploads files directly to S3 via presigned PUT URLs, bypassing this API
+ * (and Lambda's 6MB synchronous payload limit) for the actual file bytes.
+ * Returns the resulting S3 keys, which /intake and /intake/video accept in
+ * place of the file bytes themselves.
+ */
+async function uploadToS3(items: { blob: File | Blob; filename: string }[]): Promise<string[]> {
+  const presigned = await request<PresignedUpload[]>("/uploads/presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filenames: items.map((item) => item.filename) }),
+  });
+
+  await Promise.all(
+    items.map((item, i) =>
+      fetch(presigned[i].upload_url, {
+        method: "PUT",
+        body: item.blob,
+        headers: { "Content-Type": item.blob.type || "application/octet-stream" },
+      })
+    )
+  );
+
+  return presigned.map((p) => p.s3_key);
+}
+
+export async function intakeImage(files: File[] | Blob[], filenamePrefix = "photo"): Promise<IntakeResponse> {
+  const items = files.map((file, i) => ({
+    blob: file,
+    filename: file instanceof File ? file.name : `${filenamePrefix}-${i}.jpg`,
+  }));
+  const s3Keys = await uploadToS3(items);
+  return request<IntakeResponse>("/intake", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ s3_keys: s3Keys }),
+  });
+}
+
+export async function intakeVideo(file: File | Blob, filename = "clip.webm"): Promise<IntakeResponse> {
+  const [s3Key] = await uploadToS3([{ blob: file, filename: file instanceof File ? file.name : filename }]);
+  return request<IntakeResponse>("/intake/video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ s3_key: s3Key }),
+  });
 }
 
 // ---- Inventory ----
