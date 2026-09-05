@@ -39,13 +39,17 @@ export const CATEGORY_LABELS: Record<Category, string> = {
 };
 
 export type DietarySource = "printed_symbol" | "inferred" | "not_found";
-export type PanelSource = "printed_panel" | "inferred";
+export type PanelSource = "printed_panel" | "inferred" | "unavailable";
 
 export interface DietaryFlags {
   is_vegetarian: boolean | null;
   is_vegetarian_source: DietarySource;
-  is_low_sugar: boolean;
-  is_low_sodium: boolean;
+  /** null when unknown — either no nutrition panel at all (source
+   * "inferred", falls back to the model's category guess) or a panel
+   * exists but this specific value wasn't captured (source
+   * "unavailable" — must render as "Unavailable", never a guessed Yes/No). */
+  is_low_sugar: boolean | null;
+  is_low_sodium: boolean | null;
   is_low_sugar_source: PanelSource;
   is_low_sodium_source: PanelSource;
   is_gluten_free: boolean;
@@ -86,9 +90,15 @@ export interface DonationItem {
   dietary_flags: DietaryFlags;
   nutrition_facts: NutritionFacts;
   quantity: number;
-  /** URLs valid right now — the backend regenerates these (S3 presigned URLs
-   * expire) on every read, so never cache one past the response it came in. */
+  /** Full-resolution originals. URLs valid right now — the backend
+   * regenerates these (S3 presigned URLs expire) on every read, so never
+   * cache one past the response it came in. */
   image_urls: string[];
+  /** Resized (max 400px) variants, one per image_urls entry, for card/list
+   * display — same regenerate-on-every-read rule as image_urls. Empty for
+   * items scanned before this field existed; fall back to image_urls[0]
+   * for the card preview in that case. */
+  thumbnail_urls: string[];
   [key: string]: unknown; // the backend PATCH endpoint merges arbitrary fields
 }
 

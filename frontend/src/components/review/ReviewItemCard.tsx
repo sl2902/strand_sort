@@ -53,7 +53,12 @@ export function ReviewItemCard({
       </div>
 
       <div className="mt-3">
-        <ImageGallery urls={item.image_urls} alt={item.product_name} onRetry={onImageRetry} />
+        <ImageGallery
+          urls={item.image_urls}
+          thumbnailUrls={item.thumbnail_urls}
+          alt={item.product_name}
+          onRetry={onImageRetry}
+        />
       </div>
 
       <div className="mt-3 flex items-start gap-2 rounded-xl border border-saffron-400/50 bg-saffron-100/70 px-3.5 py-2.5 text-sm text-saffron-700">

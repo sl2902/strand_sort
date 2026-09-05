@@ -162,7 +162,12 @@ export function ItemEditForm({
               <label key={key} className="flex items-center gap-2 text-sm text-ink-800">
                 <input
                   type="checkbox"
-                  checked={draft.dietary_flags[key]}
+                  // is_low_sugar/is_low_sodium can be null (unavailable) —
+                  // renders unchecked, same as false; checking/unchecking
+                  // here always sets an explicit true/false, same as
+                  // before (a human editing this field is making a
+                  // definite correction, not choosing to leave it unknown).
+                  checked={draft.dietary_flags[key] ?? false}
                   onChange={(e) => setFlag(key, e.target.checked)}
                 />
                 {label}

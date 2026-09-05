@@ -48,7 +48,7 @@ export function InventoryItemCard({
       className="group relative flex min-w-0 gap-3 rounded-2xl border border-cream-300 bg-cream-50 p-4 pr-9 shadow-soft transition-all hover:-translate-y-0.5 hover:shadow-lift"
     >
       <ImageThumbnail
-        url={item.image_urls[0]}
+        url={item.thumbnail_urls[0] ?? item.image_urls[0]}
         images={item.image_urls}
         alt={item.product_name}
         onRetry={onImageRetry}

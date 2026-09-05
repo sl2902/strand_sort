@@ -137,14 +137,23 @@ export function ImageThumbnail({
 /** Horizontal strip of larger photos — item detail, review queue cards. */
 export function ImageGallery({
   urls,
+  thumbnailUrls,
   alt,
   onRetry,
 }: {
+  /** Full-resolution originals — always what the lightbox opens, regardless
+   * of what the strip itself is displaying. */
   urls: string[];
+  /** Smaller variants for the strip display itself. Falls back to `urls`
+   * when omitted or empty (e.g. items scanned before thumbnails existed,
+   * or callers like the item detail page that intentionally always show
+   * full originals in the strip). */
+  thumbnailUrls?: string[];
   alt: string;
   onRetry?: () => void;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const displayUrls = thumbnailUrls && thumbnailUrls.length > 0 ? thumbnailUrls : urls;
 
   if (urls.length === 0) {
     return (
@@ -158,7 +167,7 @@ export function ImageGallery({
   return (
     <>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {urls.map((url, i) => (
+        {displayUrls.map((url, i) => (
           <Thumb
             key={`${url}-${i}`}
             url={url}

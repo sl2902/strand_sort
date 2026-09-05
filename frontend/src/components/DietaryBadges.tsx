@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import clsx from "clsx";
 import { Leaf, Sprout, WheatOff, Droplets, Candy, Beef } from "lucide-react";
 import type { DietaryFlags, FssaiSymbol } from "../lib/types";
 import { Badge } from "./Badge";
@@ -85,7 +86,7 @@ export function DietaryBadgeRow({ flags, fssaiSymbol }: { flags: DietaryFlags; f
 
 /** Full dietary breakdown for the item detail view, each row tagged with its source. */
 export function DietaryDetailList({ flags, fssaiSymbol }: { flags: DietaryFlags; fssaiSymbol?: FssaiSymbol }) {
-  const rows: { label: string; value: string; source: string; positive: boolean }[] = [
+  const rows: { label: string; value: string; source: string; positive: boolean; unavailable?: boolean }[] = [
     {
       label: "Vegetarian",
       value: flags.is_vegetarian === null ? "Unknown" : flags.is_vegetarian ? "Yes" : "No",
@@ -106,15 +107,21 @@ export function DietaryDetailList({ flags, fssaiSymbol }: { flags: DietaryFlags;
     },
     {
       label: "Low sugar",
-      value: flags.is_low_sugar ? "Yes" : "No",
+      // null means unknown — either no panel at all (source "inferred",
+      // falls back to the model's own guess upstream) or a panel exists but
+      // this value wasn't captured (source "unavailable"). Either way,
+      // showing "No" here would be a confident claim that wasn't earned.
+      value: flags.is_low_sugar === null ? "Unavailable" : flags.is_low_sugar ? "Yes" : "No",
       source: flags.is_low_sugar_source,
-      positive: flags.is_low_sugar,
+      positive: flags.is_low_sugar === true,
+      unavailable: flags.is_low_sugar === null,
     },
     {
       label: "Low sodium",
-      value: flags.is_low_sodium ? "Yes" : "No",
+      value: flags.is_low_sodium === null ? "Unavailable" : flags.is_low_sodium ? "Yes" : "No",
       source: flags.is_low_sodium_source,
-      positive: flags.is_low_sodium,
+      positive: flags.is_low_sodium === true,
+      unavailable: flags.is_low_sodium === null,
     },
   ];
 
@@ -127,7 +134,12 @@ export function DietaryDetailList({ flags, fssaiSymbol }: { flags: DietaryFlags;
             {row.label === "Vegetarian" && fssaiSymbol && fssaiSymbol !== "none" && (
               <FssaiMark symbol={fssaiSymbol} size={20} />
             )}
-            <span className={`text-sm font-medium ${row.positive ? "text-success-600" : "text-ink-800"}`}>
+            <span
+              className={clsx(
+                "text-sm font-medium",
+                row.unavailable ? "italic text-ink-700/50" : row.positive ? "text-success-600" : "text-ink-800"
+              )}
+            >
               {row.value}
             </span>
             <SourceDot source={row.source} />

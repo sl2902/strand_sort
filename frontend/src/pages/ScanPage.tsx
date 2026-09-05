@@ -45,7 +45,10 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
       const { summary, item } = await call();
       // Prefer the server's persistent URL over the local blob preview — the
       // blob doesn't survive a page reload, but a real image_urls entry does.
-      const persistentPreviewUrl = item?.image_urls[0] ? resolveImageUrl(item.image_urls[0]) : undefined;
+      // Prefer the thumbnail (much smaller) over the full original; older
+      // items scanned before thumbnails existed fall back to the original.
+      const persistentPreviewRef = item?.thumbnail_urls[0] ?? item?.image_urls[0];
+      const persistentPreviewUrl = persistentPreviewRef ? resolveImageUrl(persistentPreviewRef) : undefined;
       if (persistentPreviewUrl && previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
