@@ -33,6 +33,7 @@ def _with_resolved_images(item: dict[str, Any] | None) -> dict[str, Any] | None:
     if item is None:
         return None
     item["image_urls"] = resolve_image_urls(item.get("image_urls", []))
+    item["thumbnail_urls"] = resolve_image_urls(item.get("thumbnail_urls", []))
     return item
 
 

@@ -83,21 +83,40 @@ LOW_SUGAR_THRESHOLD_G = 5.0       # per 100g/serving, matching the system prompt
 LOW_SODIUM_THRESHOLD_MG = 140.0   # per serving, matching the system prompt's own stated rule
 
 
-def _recompute_low_sugar(nf: NutritionFacts) -> tuple[bool, str] | None:
-    """Returns (is_low_sugar, source) computed from the extracted sugars_g, or
-    None when there's no real number to check (no panel found, or sugars_g
-    wasn't extracted) — callers should leave the model's own inferred value
-    untouched in that case rather than guessing."""
-    if not nf.panel_found or nf.sugars_g is None:
+def _derive_nutrition_flag(
+    value: float | None, threshold: float, panel_found: bool
+) -> tuple[bool | None, str] | None:
+    """Returns (value, source) to override dietary_flags with, or None to
+    leave the model's own inferred guess on dietary_flags completely
+    untouched.
+
+    Three distinct cases, not two:
+    - A real number was extracted: compute deterministically — never trust
+      the model's own boolean here, same failure mode as is_expired (it can
+      misapply its own stated threshold, or fall back to a category-level
+      assumption that contradicts a number it already extracted).
+    - No nutrition panel at all: return None (skip) — the model's
+      category-based guess is the correct, accepted fallback here, this
+      function has no grounds to override it with anything.
+    - A panel exists but this specific value wasn't captured: this is NOT
+      the same as "no panel" — showing the model's confident Yes/No guess
+      here would look like a measurement was taken when it wasn't. Returns
+      an explicit (None, "unavailable") override instead of falling
+      through to the model's guess.
+    """
+    if value is not None:
+        return value <= threshold, "printed_panel"
+    if not panel_found:
         return None
-    return nf.sugars_g <= LOW_SUGAR_THRESHOLD_G, "printed_panel"
+    return None, "unavailable"
 
 
-def _recompute_low_sodium(nf: NutritionFacts) -> tuple[bool, str] | None:
-    """Same as _recompute_low_sugar, for sodium_mg."""
-    if not nf.panel_found or nf.sodium_mg is None:
-        return None
-    return nf.sodium_mg <= LOW_SODIUM_THRESHOLD_MG, "printed_panel"
+def _recompute_low_sugar(nf: NutritionFacts) -> tuple[bool | None, str] | None:
+    return _derive_nutrition_flag(nf.sugars_g, LOW_SUGAR_THRESHOLD_G, nf.panel_found)
+
+
+def _recompute_low_sodium(nf: NutritionFacts) -> tuple[bool | None, str] | None:
+    return _derive_nutrition_flag(nf.sodium_mg, LOW_SODIUM_THRESHOLD_MG, nf.panel_found)
 
 
 def _to_donation_item(result: VisionExtraction) -> DonationItem:

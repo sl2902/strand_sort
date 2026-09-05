@@ -40,10 +40,13 @@ class Category(str, Enum):
 class DietaryFlags(BaseModel):
     is_vegetarian: bool | None = None
     is_vegetarian_source: Literal["printed_symbol", "inferred", "not_found"] = "not_found"
-    is_low_sugar: bool = False
-    is_low_sodium: bool = False
-    is_low_sugar_source: Literal["printed_panel", "inferred"] = "inferred"
-    is_low_sodium_source: Literal["printed_panel", "inferred"] = "inferred"
+    is_low_sugar: bool | None = Field(
+        None, description="None when unknown — either no panel at all (falls back to the model's category "
+        "inference, source='inferred') or a panel exists but this value wasn't captured (source='unavailable')"
+    )
+    is_low_sodium: bool | None = Field(None, description="Same tri-state as is_low_sugar")
+    is_low_sugar_source: Literal["printed_panel", "inferred", "unavailable"] = "inferred"
+    is_low_sodium_source: Literal["printed_panel", "inferred", "unavailable"] = "inferred"
     is_gluten_free: bool = False
     is_vegan: bool = False
     other_flags_source: Literal["inferred"] = "inferred"
@@ -88,7 +91,10 @@ class DonationItem(BaseModel):
     dietary_flags: DietaryFlags = Field(default_factory=DietaryFlags)
     nutrition_facts: NutritionFacts = Field(default_factory=NutritionFacts)
     quantity: int = Field(default=1, ge=1, description="Number of units in this intake scan")
-    image_urls: list[str] = Field(default_factory=list)
+    image_urls: list[str] = Field(default_factory=list, description="Full-resolution originals")
+    thumbnail_urls: list[str] = Field(
+        default_factory=list, description="Resized (max 400px) variants for card/list display, one per image_urls entry"
+    )
 
 class VisionExtraction(BaseModel):
     """Raw fields the model is actually qualified to report"""

@@ -73,6 +73,7 @@ def test_list_inventory_no_filter_calls_list_all(mock_get_repo, client):
             "item_id": "abc",
             "product_name": "Eggs",
             "image_urls": [],
+            "thumbnail_urls": [],
             "expiry_status": None,
             "is_expired": False,
         }

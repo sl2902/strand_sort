@@ -21,6 +21,7 @@ def _decorate_item(item: dict[str, Any]) -> dict[str, Any]:
     """Same freshness rule as api/inventory.py — recomputed on every read,
     never trusted from whatever was set when the item was first flagged."""
     item["image_urls"] = resolve_image_urls(item.get("image_urls", []))
+    item["thumbnail_urls"] = resolve_image_urls(item.get("thumbnail_urls", []))
     status = compute_expiry_status(item.get("expiration_date"))
     item["expiry_status"] = status
     item["is_expired"] = status == ExpiryStatus.EXPIRED

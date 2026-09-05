@@ -16,6 +16,7 @@ def _decorate_item(item: dict[str, Any]) -> dict[str, Any]:
     presigned S3 URLs expire, and "is this expired" changes daily even
     though the stored date doesn't."""
     item["image_urls"] = resolve_image_urls(item.get("image_urls", []))
+    item["thumbnail_urls"] = resolve_image_urls(item.get("thumbnail_urls", []))
     status = compute_expiry_status(item.get("expiration_date"))
     item["expiry_status"] = status
     item["is_expired"] = status == ExpiryStatus.EXPIRED

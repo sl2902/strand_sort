@@ -29,7 +29,9 @@ def scan_package_batch(image_sources: list[str]) -> dict[str, Any]:
     item: DonationItem = get_extractor(images_base64)
 
     storage = get_image_storage()
-    item.image_urls = storage.save_images_from_s3(item.item_id, image_sources)
+    saved = storage.save_images_from_s3(item.item_id, image_sources)
+    item.image_urls = saved.image_urls
+    item.thumbnail_urls = saved.thumbnail_urls
 
     if item.requires_human_review:
         # Persisted straight to the inventory table with
@@ -96,6 +98,7 @@ def commit_to_inventory(item_data: dict[str, Any]) -> dict[str, Any]:
             item_id=existing_item["item_id"],
             additional_qty=incoming_qty,
             image_urls=item_data.get("image_urls"),
+            thumbnail_urls=item_data.get("thumbnail_urls"),
         )
         incoming_item_id = item_data.get("item_id")
         if incoming_item_id and incoming_item_id != existing_item["item_id"]:

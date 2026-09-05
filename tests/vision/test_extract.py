@@ -25,11 +25,18 @@ class TestRecomputeLowSugar:
     def test_boundary_value_is_low(self):
         assert _recompute_low_sugar(_nutrition_facts(sugars_g=5.0)) == (True, "printed_panel")
 
-    def test_no_panel_found_returns_none(self):
-        assert _recompute_low_sugar(_nutrition_facts(panel_found=False, sugars_g=51.84)) is None
+    def test_no_panel_at_all_skips_override(self):
+        """No panel, no value: leave the model's own category-based guess
+        completely untouched (the accepted, correct fallback)."""
+        assert _recompute_low_sugar(_nutrition_facts(panel_found=False, sugars_g=None)) is None
 
-    def test_missing_value_returns_none(self):
-        assert _recompute_low_sugar(_nutrition_facts(sugars_g=None)) is None
+    def test_panel_found_but_value_missing_is_unavailable_not_a_guess(self):
+        """The actual bug this ticket fixes: a panel exists (other fields
+        like serving size/protein were captured fine) but sugars_g
+        specifically wasn't. This must NOT fall back to the model's
+        confident Yes/No guess — that would look like a measurement was
+        taken when it wasn't. Distinct from the no-panel-at-all case."""
+        assert _recompute_low_sugar(_nutrition_facts(panel_found=True, sugars_g=None)) == (None, "unavailable")
 
 
 class TestRecomputeLowSodium:
@@ -43,11 +50,11 @@ class TestRecomputeLowSodium:
     def test_boundary_value_is_low(self):
         assert _recompute_low_sodium(_nutrition_facts(sodium_mg=140.0)) == (True, "printed_panel")
 
-    def test_no_panel_found_returns_none(self):
-        assert _recompute_low_sodium(_nutrition_facts(panel_found=False, sodium_mg=222)) is None
+    def test_no_panel_at_all_skips_override(self):
+        assert _recompute_low_sodium(_nutrition_facts(panel_found=False, sodium_mg=None)) is None
 
-    def test_missing_value_returns_none(self):
-        assert _recompute_low_sodium(_nutrition_facts(sodium_mg=None)) is None
+    def test_panel_found_but_value_missing_is_unavailable_not_a_guess(self):
+        assert _recompute_low_sodium(_nutrition_facts(panel_found=True, sodium_mg=None)) == (None, "unavailable")
 
 
 def _vision_extraction(**overrides) -> VisionExtraction:
@@ -127,13 +134,39 @@ class TestToDonationItemOverridesModelAssertion:
         assert item.dietary_flags.is_low_sodium_source == "inferred"
 
     def test_partial_panel_overrides_only_the_field_with_a_real_number(self):
-        """Sodium was read but sugar wasn't — is_low_sodium should still get
-        corrected even though is_low_sugar has nothing real to check against."""
+        """Sodium was read but sugar wasn't, and a panel genuinely exists
+        (panel_found=True, the _nutrition_facts default) — is_low_sodium
+        gets corrected from the real 222mg reading, while is_low_sugar
+        becomes explicitly "unavailable" (a panel exists but didn't yield
+        this value) rather than falling back to the model's Yes/No guess,
+        which would misleadingly look like a real measurement."""
         result = _vision_extraction(
             nutrition_facts=_nutrition_facts(sugars_g=None, sodium_mg=222),
             dietary_flags=DietaryFlags(
-                is_low_sugar=True,  # model's own guess — left alone, no real sugar number
+                is_low_sugar=True,  # model's own guess — must be overridden to None, not left alone
                 is_low_sodium=True,  # wrong — must be corrected from the real 222mg reading
+                is_low_sugar_source="inferred",
+                is_low_sodium_source="inferred",
+            ),
+        )
+        item = _to_donation_item(result)
+
+        assert item.dietary_flags.is_low_sugar is None
+        assert item.dietary_flags.is_low_sugar_source == "unavailable"
+        assert item.dietary_flags.is_low_sodium is False
+        assert item.dietary_flags.is_low_sodium_source == "printed_panel"
+
+    def test_no_panel_at_all_still_falls_back_to_model_guess_for_both_fields(self):
+        """Distinct fixture from test_no_nutrition_panel_keeps_model_inference
+        below (which uses is_low_sugar=False/is_low_sodium=True) — covers
+        the same no-panel case but is the direct counterpart to the
+        partial-panel test above, confirming panel_found=False is still
+        never "unavailable", regardless of which field is checked."""
+        result = _vision_extraction(
+            nutrition_facts=_nutrition_facts(panel_found=False, sugars_g=None, sodium_mg=None),
+            dietary_flags=DietaryFlags(
+                is_low_sugar=True,
+                is_low_sodium=True,
                 is_low_sugar_source="inferred",
                 is_low_sodium_source="inferred",
             ),
@@ -142,8 +175,8 @@ class TestToDonationItemOverridesModelAssertion:
 
         assert item.dietary_flags.is_low_sugar is True
         assert item.dietary_flags.is_low_sugar_source == "inferred"
-        assert item.dietary_flags.is_low_sodium is False
-        assert item.dietary_flags.is_low_sodium_source == "printed_panel"
+        assert item.dietary_flags.is_low_sodium is True
+        assert item.dietary_flags.is_low_sodium_source == "inferred"
 
 
 class TestNoDateSentinelDoesNotCrash:

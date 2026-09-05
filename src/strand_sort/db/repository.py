@@ -27,9 +27,15 @@ class InventoryRepository(ABC):
 
     @abstractmethod
     def increment_quantity(
-        self, item_id: str, additional_qty: int, image_urls: Optional[list[str]] = None
+        self,
+        item_id: str,
+        additional_qty: int,
+        image_urls: Optional[list[str]] = None,
+        thumbnail_urls: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """Increments quantity of an existing item, update image_urls if provided, and returns the updated record"""
+        """Increments quantity of an existing item, updates image_urls/
+        thumbnail_urls if provided and not already set, and returns the
+        updated record"""
         pass
 
     @abstractmethod
@@ -162,7 +168,11 @@ class SQLiteRepository(InventoryRepository):
             return None
 
     def increment_quantity(
-        self, item_id: str, additional_qty: int, image_urls: Optional[list[str]] = None
+        self,
+        item_id: str,
+        additional_qty: int,
+        image_urls: Optional[list[str]] = None,
+        thumbnail_urls: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -176,6 +186,8 @@ class SQLiteRepository(InventoryRepository):
 
             if image_urls and not payload.get("image_urls"):
                 payload["image_urls"] = image_urls
+            if thumbnail_urls and not payload.get("thumbnail_urls"):
+                payload["thumbnail_urls"] = thumbnail_urls
 
             cursor.execute(
                 "UPDATE inventory SET payload = ?, quantity = ? WHERE item_id = ?",
@@ -245,7 +257,7 @@ class DynamoDBRepository(InventoryRepository):
 
     def list_all(self) -> list[dict[str, Any]]:
         response = self.table.scan()
-        return response.get("Items", [])
+        return [convert_decimals_to_native(item) for item in response.get("Items", [])]
 
     def save_item(self, item_data: dict[str, Any]) -> None:
         """
@@ -276,7 +288,8 @@ class DynamoDBRepository(InventoryRepository):
 
     def get_by_id(self, item_id: str) -> Optional[dict[str, Any]]:
         response = self.table.get_item(Key={"item_id": item_id})
-        return response.get("Item")
+        item = response.get("Item")
+        return convert_decimals_to_native(item) if item is not None else None
 
     def search_by_name(self, product_name: str) -> list[dict[str, Any]]:
         """
@@ -294,7 +307,7 @@ class DynamoDBRepository(InventoryRepository):
             KeyConditionExpression=Key("product_name").eq(product_name)
         )
         items = response.get("Items", [])
-        
+
         # Fallback to Scan with filter if query yields no exact match
         if not items:
             scan_response = self.table.scan(
@@ -302,7 +315,7 @@ class DynamoDBRepository(InventoryRepository):
             )
             items = scan_response.get("Items", [])
 
-        return items
+        return [convert_decimals_to_native(item) for item in items]
 
     def find_by_hash(self, idempotency_key: str) -> Optional[dict[str, Any]]:
         # IdempotencyKeyIndex GSI query
@@ -311,7 +324,7 @@ class DynamoDBRepository(InventoryRepository):
             KeyConditionExpression=Key("idempotency_key").eq(idempotency_key)
         )
         items = response.get("Items", [])
-        return items[0] if items else None
+        return convert_decimals_to_native(items[0]) if items else None
 
     def check_duplicate_active_inventory(self, product_name: str, expiration_date: str) -> Optional[dict[str, Any]]:
         # ProductNameExpirationIndex is a composite key (product_name HASH +
@@ -328,27 +341,42 @@ class DynamoDBRepository(InventoryRepository):
             FilterExpression=Attr("requires_human_review").eq(False) | Attr("requires_human_review").not_exists()
         )
         items = response.get("Items", [])
-        return items[0] if items else None
+        return convert_decimals_to_native(items[0]) if items else None
 
     def increment_quantity(
-        self, item_id: str, additional_qty: int, image_urls: Optional[list[str]] = None
+        self,
+        item_id: str,
+        additional_qty: int,
+        image_urls: Optional[list[str]] = None,
+        thumbnail_urls: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        existing = self.get_by_id(item_id)
-        if existing and not existing.get("image_urls") and image_urls:
-            self.table.update_item(
-                Key={"item_id": item_id},
-                UpdateExpression="ADD quantity :q SET image_urls = :urls",
-                ExpressionAttributeValues={":q": additional_qty, ":urls": image_urls},
-                ReturnValues="ALL_NEW",
-            )
-        else:
-            response = self.table.update_item(
-                Key={"item_id": item_id},
-                UpdateExpression="ADD quantity :q",
-                ExpressionAttributeValues={":q": additional_qty},
-                ReturnValues="ALL_NEW",
-            )
-        return response.get("Attributes", {})
+        # Previously branched into two separate update_item calls, only
+        # assigning the result to `response` in the else branch — taking the
+        # if branch (existing item had no image_urls yet, new ones provided)
+        # raised UnboundLocalError on the return below. Single call covers
+        # every combination of image_urls/thumbnail_urls being newly set.
+        existing = self.get_by_id(item_id) or {}
+        set_clauses = []
+        expr_values: dict[str, Any] = {":q": additional_qty}
+
+        if image_urls and not existing.get("image_urls"):
+            set_clauses.append("image_urls = :image_urls")
+            expr_values[":image_urls"] = image_urls
+        if thumbnail_urls and not existing.get("thumbnail_urls"):
+            set_clauses.append("thumbnail_urls = :thumbnail_urls")
+            expr_values[":thumbnail_urls"] = thumbnail_urls
+
+        update_expression = "ADD quantity :q"
+        if set_clauses:
+            update_expression += " SET " + ", ".join(set_clauses)
+
+        response = self.table.update_item(
+            Key={"item_id": item_id},
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=expr_values,
+            ReturnValues="ALL_NEW",
+        )
+        return convert_decimals_to_native(response.get("Attributes", {}))
 
     def decrement_quantity(self, item_id: str, qty_to_remove: int) -> dict[str, Any]:
         """Atomically decrements quantity with a condition check to prevent negative stock"""
@@ -363,14 +391,14 @@ class DynamoDBRepository(InventoryRepository):
                 },
                 ReturnValues="ALL_NEW"
             )
-            return response.get("Attributes", {})
+            return convert_decimals_to_native(response.get("Attributes", {}))
         except botocore.exceptions.ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 raise ValueError(f"Insufficient stock for item ID {item_id}.")
             raise
 
     def update_item(self, item_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-        existing = self.get_by_id(item_id)
+        existing = self.get_by_id(item_id)  # already Decimal-free, see get_by_id
         if not existing:
             raise ValueError(f"Item {item_id} not found")
         existing.update(updates)
@@ -394,4 +422,23 @@ def convert_floats_to_decimals(obj: Any) -> Any:
         return {k: convert_floats_to_decimals(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [convert_floats_to_decimals(v) for v in obj]
+    return obj
+
+def convert_decimals_to_native(obj: Any) -> Any:
+    """Inverse of convert_floats_to_decimals — boto3's DynamoDB resource API
+    always returns Decimal for Number-type attributes (quantity, any float
+    field), regardless of what was originally stored. json.dumps() can't
+    serialize Decimal at all; this is what silently broke the Strands @tool
+    boundary's json.dumps(result) call for any tool returning a DynamoDB
+    dict once it happened to contain one (falls back to str(result),
+    producing single-quoted, unparseable "JSON" — the exact
+    "Could not parse ... result" symptom). Call this on every value read
+    back from DynamoDB, not just ones a tool might return — every read
+    path shares the same repository methods."""
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == obj.to_integral_value() else float(obj)
+    if isinstance(obj, dict):
+        return {k: convert_decimals_to_native(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [convert_decimals_to_native(v) for v in obj]
     return obj

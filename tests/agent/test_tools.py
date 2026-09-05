@@ -1,3 +1,4 @@
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ from moto import mock_aws
 from strand_sort.agent.tools import commit_to_inventory, scan_package_batch
 from strand_sort.db.repository import DynamoDBRepository
 from strand_sort.models import NO_EXPIRATION_DATE, DietaryFlags, DonationItem, NutritionFacts, VisionExtraction
+from strand_sort.storage.image_storage import SavedImages
 from strand_sort.vision.extract import _to_donation_item
 
 
@@ -36,7 +38,9 @@ class TestScanPackageBatchReadsFromS3:
     def test_fetches_each_source_from_s3_for_extraction(self, mock_encode, mock_extractor, mock_get_storage):
         mock_encode.return_value = "ZmFrZQ=="
         mock_extractor.return_value = _fake_item()
-        mock_get_storage.return_value = MagicMock(save_images_from_s3=MagicMock(return_value=[]))
+        mock_get_storage.return_value = MagicMock(
+            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+        )
 
         scan_package_batch(image_sources=["pending-uploads/a.jpg", "pending-uploads/b.jpg"])
 
@@ -53,13 +57,16 @@ class TestScanPackageBatchReadsFromS3:
         mock_encode.return_value = "ZmFrZQ=="
         mock_extractor.return_value = _fake_item()
         mock_storage = MagicMock()
-        mock_storage.save_images_from_s3.return_value = ["abc/0.jpg"]
+        mock_storage.save_images_from_s3.return_value = SavedImages(
+            image_urls=["abc/0.jpg"], thumbnail_urls=["abc/thumb_0.jpg"]
+        )
         mock_get_storage.return_value = mock_storage
 
         result = scan_package_batch(image_sources=["pending-uploads/a.jpg"])
 
         mock_storage.save_images_from_s3.assert_called_once_with("abc", ["pending-uploads/a.jpg"])
         assert result["item"]["image_urls"] == ["abc/0.jpg"]
+        assert result["item"]["thumbnail_urls"] == ["abc/thumb_0.jpg"]
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
     @patch("strand_sort.agent.tools.get_image_storage")
@@ -70,7 +77,9 @@ class TestScanPackageBatchReadsFromS3:
     ):
         mock_encode.return_value = "ZmFrZQ=="
         mock_extractor.return_value = _fake_item(requires_human_review=True, review_reason="unreadable date")
-        mock_get_storage.return_value = MagicMock(save_images_from_s3=MagicMock(return_value=[]))
+        mock_get_storage.return_value = MagicMock(
+            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+        )
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
@@ -95,7 +104,9 @@ class TestVisibilityLogging:
     def test_scan_package_batch_logs_start_and_result(self, mock_encode, mock_extractor, mock_get_storage, mock_logger):
         mock_encode.return_value = "ZmFrZQ=="
         mock_extractor.return_value = _fake_item(requires_human_review=False)
-        mock_get_storage.return_value = MagicMock(save_images_from_s3=MagicMock(return_value=[]))
+        mock_get_storage.return_value = MagicMock(
+            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+        )
 
         scan_package_batch(image_sources=["pending-uploads/a.jpg"])
 
@@ -282,7 +293,9 @@ class TestScanPackageBatchNoExpirationDateReachesRealDynamoDB:
         )
         mock_extractor.return_value = _to_donation_item(no_date_extraction)
         mock_encode.return_value = "ZmFrZQ=="
-        mock_get_storage.return_value = MagicMock(save_images_from_s3=MagicMock(return_value=[]))
+        mock_get_storage.return_value = MagicMock(
+            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+        )
 
         real_repo = DynamoDBRepository(table_name="scan_batch_no_date_test")
         mock_get_repo.return_value = real_repo
@@ -297,3 +310,164 @@ class TestScanPackageBatchNoExpirationDateReachesRealDynamoDB:
         fetched = real_repo.get_by_id(result["item_id"])
         assert fetched is not None, "item was silently lost — exactly the reported bug"
         assert fetched["expiration_date"] == NO_EXPIRATION_DATE
+
+
+class TestCommitToInventoryResultIsJsonSerializable:
+    """Regression for: commit_to_inventory's increment branch embeds
+    `updated_item` (repo.increment_quantity's return value) straight into
+    the tool's result dict. Against real DynamoDB, that dict contains
+    Decimal for every Number-type attribute (quantity, any float field) —
+    boto3's resource API returns Decimal unconditionally, regardless of
+    what was originally stored. json.dumps() cannot serialize Decimal at
+    all. Strands' @tool wrapper (_wrap_tool_result in
+    strands/tools/decorator.py) tries json.dumps(result) and falls back to
+    str(result) on failure — producing exactly the single-quoted,
+    unparseable "JSON" seen in the reported CloudWatch warnings
+    ("Could not parse ... result"). Confirmed independent of thumbnails:
+    this reproduces with plain image_urls alone, no thumbnail_urls
+    involved — only reachable at all since the ProductNameExpirationIndex
+    fix made the increment path reachable in the first place."""
+
+    @pytest.fixture
+    def dynamodb_table(self):
+        with mock_aws():
+            os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+            dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+            table = dynamodb.create_table(
+                TableName="commit_json_test",
+                KeySchema=[{"AttributeName": "item_id", "KeyType": "HASH"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "item_id", "AttributeType": "S"},
+                    {"AttributeName": "product_name", "AttributeType": "S"},
+                    {"AttributeName": "expiration_date", "AttributeType": "S"},
+                ],
+                GlobalSecondaryIndexes=[
+                    {
+                        "IndexName": "ProductNameExpirationIndex",
+                        "KeySchema": [
+                            {"AttributeName": "product_name", "KeyType": "HASH"},
+                            {"AttributeName": "expiration_date", "KeyType": "RANGE"},
+                        ],
+                        "Projection": {"ProjectionType": "ALL"},
+                    },
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            yield table
+
+    @patch("strand_sort.agent.tools.get_inventory_repository")
+    def test_increment_branch_result_round_trips_through_json(self, mock_get_repo, dynamodb_table):
+        real_repo = DynamoDBRepository(table_name="commit_json_test")
+        mock_get_repo.return_value = real_repo
+
+        # First scan: creates the batch for real (quantity stored as a
+        # DynamoDB Number, always read back as Decimal).
+        commit_to_inventory({
+            "item_id": "existing-item",
+            "product_name": "Milk",
+            "expiration_date": "2026-10-01",
+            "quantity": 5,
+            "image_urls": ["existing-item/0.jpg"],
+            "thumbnail_urls": ["existing-item/thumb_0.jpg"],
+        })
+
+        # Second scan of the same product/date: hits the increment branch —
+        # the one that embeds repo.increment_quantity's Decimal-laden
+        # return value directly into the result.
+        result = commit_to_inventory({
+            "item_id": "new-scan-id",
+            "product_name": "Milk",
+            "expiration_date": "2026-10-01",
+            "quantity": 1,
+            "image_urls": ["new-scan-id/0.jpg"],
+            "thumbnail_urls": ["new-scan-id/thumb_0.jpg"],
+        })
+
+        assert result["status"] == "quantity_updated"
+        # This is the actual guarantee that matters: Strands' @tool wrapper
+        # only falls back to str(result) when this raises — if this
+        # succeeds, the wrapper's own json.dumps(result) succeeds too, by
+        # the exact same code path.
+        round_tripped = json.loads(json.dumps(result))
+        assert round_tripped["item"]["quantity"] == 6
+        assert round_tripped["item"]["thumbnail_urls"] == ["existing-item/thumb_0.jpg"]
+
+
+class TestItemResultHookParsesRealCommitToInventoryOutput:
+    """The exact regression from the reported bug, not just a generic JSON
+    round-trip: constructs the event the way Strands actually would (its
+    own _wrap_tool_result does json.dumps(result) when it succeeds — see
+    strands/tools/decorator.py) from a REAL commit_to_inventory result
+    against real DynamoDB, and confirms ItemResultHook actually captures
+    the item from it. Before the fix, this exact text was str(result)
+    (single-quoted) instead, which ItemResultHook's json.loads rejected —
+    silently losing this commit from rollback tracking, not just producing
+    a bad log line."""
+
+    @pytest.fixture
+    def dynamodb_table(self):
+        with mock_aws():
+            os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+            dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+            table = dynamodb.create_table(
+                TableName="commit_hook_test",
+                KeySchema=[{"AttributeName": "item_id", "KeyType": "HASH"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "item_id", "AttributeType": "S"},
+                    {"AttributeName": "product_name", "AttributeType": "S"},
+                    {"AttributeName": "expiration_date", "AttributeType": "S"},
+                ],
+                GlobalSecondaryIndexes=[
+                    {
+                        "IndexName": "ProductNameExpirationIndex",
+                        "KeySchema": [
+                            {"AttributeName": "product_name", "KeyType": "HASH"},
+                            {"AttributeName": "expiration_date", "KeyType": "RANGE"},
+                        ],
+                        "Projection": {"ProjectionType": "ALL"},
+                    },
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            yield table
+
+    @patch("strand_sort.agent.tools.get_inventory_repository")
+    def test_hook_captures_item_from_a_real_increment_result(self, mock_get_repo, dynamodb_table):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from strand_sort.agent.result_hook import ItemResultHook
+
+        real_repo = DynamoDBRepository(table_name="commit_hook_test")
+        mock_get_repo.return_value = real_repo
+
+        commit_to_inventory({
+            "item_id": "existing-item",
+            "product_name": "Milk",
+            "expiration_date": "2026-10-01",
+            "quantity": 5,
+            "thumbnail_urls": ["existing-item/thumb_0.jpg"],
+        })
+        result = commit_to_inventory({
+            "item_id": "new-scan-id",
+            "product_name": "Milk",
+            "expiration_date": "2026-10-01",
+            "quantity": 1,
+            "thumbnail_urls": ["new-scan-id/thumb_0.jpg"],
+        })
+
+        # Exactly what Strands' _wrap_tool_result produces on the success
+        # path (json.dumps(result) — see strands/tools/decorator.py).
+        event = SimpleNamespace(
+            tool_use={"name": "commit_to_inventory"},
+            result={"content": [{"text": json.dumps(result, ensure_ascii=False)}]},
+            exception=None,
+            agent=MagicMock(),
+        )
+
+        hook = ItemResultHook()
+        hook._capture(event)
+
+        assert hook.item is not None, "hook failed to parse a real commit_to_inventory result"
+        assert hook.item["quantity"] == 6
+        event.agent.cancel.assert_called_once()

@@ -94,6 +94,21 @@ class TestSQLiteRepository:
         updated = sqlite_repo.increment_quantity(sample_item["item_id"], additional_qty=3)
         assert updated["quantity"] == 8
 
+    def test_increment_quantity_sets_thumbnail_urls_when_item_had_none(self, sqlite_repo, sample_item):
+        sqlite_repo.save_item(sample_item)  # sample_item has no thumbnail_urls
+        updated = sqlite_repo.increment_quantity(
+            sample_item["item_id"], additional_qty=1, thumbnail_urls=["item/thumb_0.jpg"]
+        )
+        assert updated["thumbnail_urls"] == ["item/thumb_0.jpg"]
+
+    def test_increment_quantity_does_not_overwrite_existing_thumbnail_urls(self, sqlite_repo, sample_item):
+        item = dict(sample_item, thumbnail_urls=["original/thumb_0.jpg"])
+        sqlite_repo.save_item(item)
+        updated = sqlite_repo.increment_quantity(
+            item["item_id"], additional_qty=1, thumbnail_urls=["new-scan/thumb_0.jpg"]
+        )
+        assert updated["thumbnail_urls"] == ["original/thumb_0.jpg"]
+
     def test_decrement_quantity_success(self, sqlite_repo, sample_item):
         sqlite_repo.save_item(sample_item)
         updated = sqlite_repo.decrement_quantity(sample_item["item_id"], qty_to_remove=2)
@@ -200,6 +215,43 @@ class TestDynamoDBRepository:
         dynamo_repo.save_item(sample_item)
         updated = dynamo_repo.increment_quantity(sample_item["item_id"], additional_qty=5)
         assert updated["quantity"] == 10
+
+    def test_increment_quantity_sets_image_urls_when_item_had_none(self, dynamo_repo, sample_item):
+        """Regression: this branch previously called update_item but never
+        assigned its result to `response`, then returned response.get(...)
+        outside the if/else — raised UnboundLocalError every time this
+        branch (existing item with no image_urls yet, new ones provided)
+        actually ran, rather than the sunny-day path this class's other
+        test happens to exercise."""
+        item = dict(sample_item)
+        item.pop("image_urls", None)
+        dynamo_repo.save_item(item)
+
+        updated = dynamo_repo.increment_quantity(
+            item["item_id"], additional_qty=1, image_urls=["item/0.jpg"]
+        )  # must not raise UnboundLocalError
+        assert updated["image_urls"] == ["item/0.jpg"]
+
+    def test_increment_quantity_sets_thumbnail_urls_when_item_had_none(self, dynamo_repo, sample_item):
+        dynamo_repo.save_item(sample_item)
+        updated = dynamo_repo.increment_quantity(
+            sample_item["item_id"], additional_qty=1, thumbnail_urls=["item/thumb_0.jpg"]
+        )
+        assert updated["thumbnail_urls"] == ["item/thumb_0.jpg"]
+
+    def test_increment_quantity_sets_both_image_and_thumbnail_urls_together(self, dynamo_repo, sample_item):
+        item = dict(sample_item)
+        item.pop("image_urls", None)
+        dynamo_repo.save_item(item)
+
+        updated = dynamo_repo.increment_quantity(
+            item["item_id"],
+            additional_qty=1,
+            image_urls=["item/0.jpg"],
+            thumbnail_urls=["item/thumb_0.jpg"],
+        )
+        assert updated["image_urls"] == ["item/0.jpg"]
+        assert updated["thumbnail_urls"] == ["item/thumb_0.jpg"]
 
     def test_decrement_quantity_success(self, dynamo_repo, sample_item):
         dynamo_repo.save_item(sample_item)
