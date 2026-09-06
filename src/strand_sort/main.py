@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from strand_sort.config import settings
-from strand_sort.api import intake, inventory, review, uploads
+from strand_sort.api import app_config, intake, inventory, review, uploads
 from strand_sort.db.repository import get_inventory_repository
 from strand_sort.storage.image_storage import check_local_image_integrity, resolve_local_storage_path
 
@@ -78,4 +78,5 @@ app.include_router(intake.router, prefix="/api/v1", tags=["intake"])
 app.include_router(inventory.router, prefix="/api/v1", tags=["inventory"])
 app.include_router(review.router, prefix="/api/v1", tags=["review"])
 app.include_router(uploads.router, prefix="/api/v1", tags=["uploads"])
+app.include_router(app_config.router, prefix="/api/v1", tags=["config"])
 

@@ -1,3 +1,4 @@
+from io import BytesIO
 from unittest.mock import patch
 
 
@@ -142,3 +143,109 @@ def test_intake_video_workflow_failure_returns_500(
     assert response.status_code == 500
     assert "Intake workflow failed" in response.json()["detail"]
     mock_logger.exception.assert_called_once()
+
+
+# ---- Local-mode routes (storage_backend=local, restored multipart flow) ----
+
+
+def test_intake_local_rejects_no_files(client):
+    # FastAPI's File(...) rejects a truly empty file list at the framework
+    # level (422) before the route body's own "at least one image" check
+    # ever runs — that check is defensive, not reachable via this exact
+    # shape, same as it was in the pre-presigned-upload implementation.
+    response = client.post("/api/v1/intake/local", files=[])
+    assert response.status_code == 422
+
+
+def test_intake_local_rejects_non_image_file(client):
+    response = client.post(
+        "/api/v1/intake/local",
+        files=[("files", ("notes.txt", BytesIO(b"hello"), "text/plain"))],
+    )
+    assert response.status_code == 400
+    assert "must be images" in response.json()["detail"]
+
+
+@patch("strand_sort.api.intake.run_intake_workflow")
+def test_intake_local_success(mock_workflow, client):
+    mock_workflow.return_value = (
+        "Item processed and committed.",
+        {"item_id": "abc123", "requires_human_review": False, "review_reason": None, "image_urls": []},
+    )
+
+    response = client.post(
+        "/api/v1/intake/local",
+        files=[("files", ("egg.jpg", BytesIO(b"fake-image-bytes"), "image/jpeg"))],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"] == "Item processed and committed."
+    assert body["item"]["item_id"] == "abc123"
+    mock_workflow.assert_called_once()
+    # Local temp file paths, not S3 keys — no pending-uploads/ prefix.
+    _, kwargs = mock_workflow.call_args
+    assert len(kwargs["image_sources"]) == 1
+    assert "pending-uploads" not in kwargs["image_sources"][0]
+
+
+@patch("strand_sort.api.intake.logger")
+@patch("strand_sort.api.intake.run_intake_workflow")
+def test_intake_local_workflow_failure_returns_500(mock_workflow, mock_logger, client):
+    mock_workflow.side_effect = RuntimeError("model unavailable")
+
+    response = client.post(
+        "/api/v1/intake/local",
+        files=[("files", ("egg.jpg", BytesIO(b"fake-image-bytes"), "image/jpeg"))],
+    )
+
+    assert response.status_code == 500
+    assert "Intake workflow failed" in response.json()["detail"]
+    mock_logger.exception.assert_called_once()
+
+
+def test_intake_video_local_rejects_non_video_file(client):
+    response = client.post(
+        "/api/v1/intake/video/local",
+        files={"file": ("notes.txt", BytesIO(b"hello"), "text/plain")},
+    )
+    assert response.status_code == 400
+    assert "must be a video" in response.json()["detail"]
+
+
+@patch("strand_sort.api.intake.run_intake_workflow")
+@patch("strand_sort.api.intake.extract_frames")
+def test_intake_video_local_success(mock_extract_frames, mock_workflow, client):
+    mock_extract_frames.return_value = [b"fake-jpeg-1", b"fake-jpeg-2"]
+    mock_workflow.return_value = (
+        "Item processed and committed.",
+        {"item_id": "abc123", "requires_human_review": False, "review_reason": None, "image_urls": []},
+    )
+
+    response = client.post(
+        "/api/v1/intake/video/local",
+        files={"file": ("scan.mp4", BytesIO(b"fake-video-bytes"), "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"] == "Item processed and committed."
+    mock_extract_frames.assert_called_once()
+    mock_workflow.assert_called_once()
+    _, kwargs = mock_workflow.call_args
+    assert len(kwargs["image_sources"]) == 2
+    # Local temp file paths for the sampled frames too — no S3 upload.
+    assert all("pending-uploads" not in src for src in kwargs["image_sources"])
+
+
+@patch("strand_sort.api.intake.extract_frames")
+def test_intake_video_local_frame_extraction_failure_returns_400(mock_extract_frames, client):
+    mock_extract_frames.side_effect = ValueError("No frames found in video")
+
+    response = client.post(
+        "/api/v1/intake/video/local",
+        files={"file": ("scan.mp4", BytesIO(b"fake-video-bytes"), "video/mp4")},
+    )
+
+    assert response.status_code == 400
+    assert "Could not process video" in response.json()["detail"]

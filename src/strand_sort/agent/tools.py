@@ -1,8 +1,10 @@
 import base64
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from strands import tool
+from strand_sort.config import settings
 from strand_sort.models import DonationItem, NO_EXPIRATION_DATE
 from strand_sort.vision.extract import get_extractor
 from strand_sort.db.repository import get_inventory_repository
@@ -11,25 +13,45 @@ from strand_sort.storage.image_storage import get_image_storage
 from strand_sort.storage.pending_uploads import get_bytes as get_pending_upload_bytes
 
 
-def _encode_image_from_s3(s3_key: str) -> str:
-    return base64.b64encode(get_pending_upload_bytes(s3_key)).decode("utf-8")
+def _get_image_bytes(source: str) -> bytes:
+    """Resolves an image source based on the active storage backend —
+    scan_package_batch doesn't need to guess what kind of string it
+    received, since settings.storage_backend already determines it: an S3
+    key under pending-uploads/ when storage_backend=s3 (the presigned
+    browser-upload flow), or a local temp file path when
+    storage_backend=local (plain multipart upload, no AWS dependency at
+    all)."""
+    if settings.storage_backend == "s3":
+        return get_pending_upload_bytes(source)
+    return Path(source).read_bytes()
+
+
+def _encode_image(source: str) -> str:
+    return base64.b64encode(_get_image_bytes(source)).decode("utf-8")
 
 
 @tool
 def scan_package_batch(image_sources: list[str]) -> dict[str, Any]:
     """
-    Scans a batch of packaging images (S3 keys under pending-uploads/,
-    already there via the browser's presigned-upload flow) for a single
-    donation item, extracts product/date/dietary info, and flags whether
-    human review is needed
+    Scans a batch of packaging images for a single donation item, extracts
+    product/date/dietary info, and flags whether human review is needed.
+    image_sources are S3 keys under pending-uploads/ when
+    storage_backend=s3, or local temp file paths when storage_backend=local.
     """
     logger.info(f"scan_package_batch starting | sources={image_sources}")
 
-    images_base64 = [_encode_image_from_s3(key) for key in image_sources]
+    images_base64 = [_encode_image(source) for source in image_sources]
     item: DonationItem = get_extractor(images_base64)
 
     storage = get_image_storage()
-    saved = storage.save_images_from_s3(item.item_id, image_sources)
+    # Same pairing as _get_image_bytes above: an S3-key source needs the
+    # S3-to-final-location copy, a local-path source needs the plain
+    # local-disk copy — get_image_storage() already returns the matching
+    # backend for whichever mode is active.
+    if settings.storage_backend == "s3":
+        saved = storage.save_images_from_s3(item.item_id, image_sources)
+    else:
+        saved = storage.save_images(item.item_id, image_sources)
     item.image_urls = saved.image_urls
     item.thumbnail_urls = saved.thumbnail_urls
 

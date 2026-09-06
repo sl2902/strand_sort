@@ -7,6 +7,7 @@ import pytest
 from moto import mock_aws
 
 from strand_sort.agent.tools import commit_to_inventory, scan_package_batch
+from strand_sort.config import settings
 from strand_sort.db.repository import DynamoDBRepository
 from strand_sort.models import NO_EXPIRATION_DATE, DietaryFlags, DonationItem, NutritionFacts, VisionExtraction
 from strand_sort.storage.image_storage import SavedImages
@@ -27,16 +28,19 @@ def _fake_item(**overrides) -> DonationItem:
 
 
 class TestScanPackageBatchReadsFromS3:
-    """image_sources are S3 keys under pending-uploads/ (the presigned
-    browser-upload flow) — scan_package_batch must fetch bytes for
-    extraction from S3, not local disk, and persist final images via the
-    S3-sourced storage method."""
+    """storage_backend=s3: image_sources are S3 keys under
+    pending-uploads/ (the presigned browser-upload flow) —
+    scan_package_batch must fetch bytes for extraction from S3, not local
+    disk, and persist final images via the S3-sourced storage method."""
 
     @patch("strand_sort.agent.tools.get_image_storage")
     @patch("strand_sort.agent.tools.get_extractor")
-    @patch("strand_sort.agent.tools._encode_image_from_s3")
-    def test_fetches_each_source_from_s3_for_extraction(self, mock_encode, mock_extractor, mock_get_storage):
-        mock_encode.return_value = "ZmFrZQ=="
+    @patch("strand_sort.agent.tools._get_image_bytes")
+    def test_fetches_each_source_from_s3_for_extraction(
+        self, mock_get_bytes, mock_extractor, mock_get_storage, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "storage_backend", "s3")
+        mock_get_bytes.return_value = b"fake"
         mock_extractor.return_value = _fake_item()
         mock_get_storage.return_value = MagicMock(
             save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
@@ -44,17 +48,20 @@ class TestScanPackageBatchReadsFromS3:
 
         scan_package_batch(image_sources=["pending-uploads/a.jpg", "pending-uploads/b.jpg"])
 
-        assert mock_encode.call_args_list == [
+        assert mock_get_bytes.call_args_list == [
             (("pending-uploads/a.jpg",),),
             (("pending-uploads/b.jpg",),),
         ]
-        mock_extractor.assert_called_once_with(["ZmFrZQ==", "ZmFrZQ=="])
+        mock_extractor.assert_called_once()
 
     @patch("strand_sort.agent.tools.get_image_storage")
     @patch("strand_sort.agent.tools.get_extractor")
-    @patch("strand_sort.agent.tools._encode_image_from_s3")
-    def test_persists_final_images_via_save_images_from_s3(self, mock_encode, mock_extractor, mock_get_storage):
-        mock_encode.return_value = "ZmFrZQ=="
+    @patch("strand_sort.agent.tools._get_image_bytes")
+    def test_persists_final_images_via_save_images_from_s3(
+        self, mock_get_bytes, mock_extractor, mock_get_storage, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "storage_backend", "s3")
+        mock_get_bytes.return_value = b"fake"
         mock_extractor.return_value = _fake_item()
         mock_storage = MagicMock()
         mock_storage.save_images_from_s3.return_value = SavedImages(
@@ -65,17 +72,19 @@ class TestScanPackageBatchReadsFromS3:
         result = scan_package_batch(image_sources=["pending-uploads/a.jpg"])
 
         mock_storage.save_images_from_s3.assert_called_once_with("abc", ["pending-uploads/a.jpg"])
+        mock_storage.save_images.assert_not_called()
         assert result["item"]["image_urls"] == ["abc/0.jpg"]
         assert result["item"]["thumbnail_urls"] == ["abc/thumb_0.jpg"]
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
     @patch("strand_sort.agent.tools.get_image_storage")
     @patch("strand_sort.agent.tools.get_extractor")
-    @patch("strand_sort.agent.tools._encode_image_from_s3")
+    @patch("strand_sort.agent.tools._get_image_bytes")
     def test_flagged_item_is_saved_to_repository(
-        self, mock_encode, mock_extractor, mock_get_storage, mock_get_repo
+        self, mock_get_bytes, mock_extractor, mock_get_storage, mock_get_repo, monkeypatch
     ):
-        mock_encode.return_value = "ZmFrZQ=="
+        monkeypatch.setattr(settings, "storage_backend", "s3")
+        mock_get_bytes.return_value = b"fake"
         mock_extractor.return_value = _fake_item(requires_human_review=True, review_reason="unreadable date")
         mock_get_storage.return_value = MagicMock(
             save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
@@ -91,6 +100,52 @@ class TestScanPackageBatchReadsFromS3:
         assert saved["requires_human_review"] is True
 
 
+class TestScanPackageBatchReadsFromLocalDisk:
+    """storage_backend=local (the default): image_sources are local temp
+    file paths written by the multipart /intake/local route — no AWS/S3
+    dependency at all. This is the mode restored by this ticket; previously
+    the presigned-S3 flow was the only option, even for fully offline
+    local dev."""
+
+    @patch("strand_sort.agent.tools.get_image_storage")
+    @patch("strand_sort.agent.tools.get_extractor")
+    def test_reads_bytes_from_local_disk_for_extraction(self, mock_extractor, mock_get_storage, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "storage_backend", "local")
+        src = tmp_path / "photo.jpg"
+        src.write_bytes(b"real-local-bytes")
+        mock_extractor.return_value = _fake_item()
+        mock_get_storage.return_value = MagicMock(
+            save_images=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+        )
+
+        scan_package_batch(image_sources=[str(src)])
+
+        mock_extractor.assert_called_once()
+        # No S3 client involvement at all — the bytes came straight off disk.
+        import base64
+        assert mock_extractor.call_args[0][0] == [base64.b64encode(b"real-local-bytes").decode("utf-8")]
+
+    @patch("strand_sort.agent.tools.get_image_storage")
+    @patch("strand_sort.agent.tools.get_extractor")
+    def test_persists_final_images_via_plain_save_images(self, mock_extractor, mock_get_storage, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "storage_backend", "local")
+        src = tmp_path / "photo.jpg"
+        src.write_bytes(b"real-local-bytes")
+        mock_extractor.return_value = _fake_item()
+        mock_storage = MagicMock()
+        mock_storage.save_images.return_value = SavedImages(
+            image_urls=["/images/abc/0.jpg"], thumbnail_urls=["/images/abc/thumb_0.jpg"]
+        )
+        mock_get_storage.return_value = mock_storage
+
+        result = scan_package_batch(image_sources=[str(src)])
+
+        mock_storage.save_images.assert_called_once_with("abc", [str(src)])
+        mock_storage.save_images_from_s3.assert_not_called()
+        assert result["item"]["image_urls"] == ["/images/abc/0.jpg"]
+        assert result["item"]["thumbnail_urls"] == ["/images/abc/thumb_0.jpg"]
+
+
 class TestVisibilityLogging:
     """Added to close a gap where a request completed cleanly (no exception
     anywhere in CloudWatch) but returned an empty summary and null item,
@@ -100,12 +155,18 @@ class TestVisibilityLogging:
     @patch("strand_sort.agent.tools.logger")
     @patch("strand_sort.agent.tools.get_image_storage")
     @patch("strand_sort.agent.tools.get_extractor")
-    @patch("strand_sort.agent.tools._encode_image_from_s3")
-    def test_scan_package_batch_logs_start_and_result(self, mock_encode, mock_extractor, mock_get_storage, mock_logger):
-        mock_encode.return_value = "ZmFrZQ=="
+    @patch("strand_sort.agent.tools._get_image_bytes")
+    def test_scan_package_batch_logs_start_and_result(
+        self, mock_get_bytes, mock_extractor, mock_get_storage, mock_logger
+    ):
+        mock_get_bytes.return_value = b"fake"
         mock_extractor.return_value = _fake_item(requires_human_review=False)
+        # storage_backend defaults to "local" in tests — configure both
+        # save methods so this logging-focused test doesn't care which one
+        # actually gets called.
         mock_get_storage.return_value = MagicMock(
-            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
+            save_images=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[])),
+            save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[])),
         )
 
         scan_package_batch(image_sources=["pending-uploads/a.jpg"])
@@ -277,11 +338,12 @@ class TestScanPackageBatchNoExpirationDateReachesRealDynamoDB:
 
     @patch("strand_sort.agent.tools.get_inventory_repository")
     @patch("strand_sort.agent.tools.get_image_storage")
-    @patch("strand_sort.agent.tools._encode_image_from_s3")
+    @patch("strand_sort.agent.tools._get_image_bytes")
     @patch("strand_sort.agent.tools.get_extractor")
     def test_no_date_scan_persists_instead_of_being_silently_lost(
-        self, mock_extractor, mock_encode, mock_get_storage, mock_get_repo, dynamodb_table
+        self, mock_extractor, mock_get_bytes, mock_get_storage, mock_get_repo, dynamodb_table, monkeypatch
     ):
+        monkeypatch.setattr(settings, "storage_backend", "s3")
         no_date_extraction = VisionExtraction(
             product_name="10on10 Whole Wheat Atta",
             category="grains_pulses",
@@ -292,7 +354,7 @@ class TestScanPackageBatchNoExpirationDateReachesRealDynamoDB:
             nutrition_facts=NutritionFacts(),
         )
         mock_extractor.return_value = _to_donation_item(no_date_extraction)
-        mock_encode.return_value = "ZmFrZQ=="
+        mock_get_bytes.return_value = b"fake"
         mock_get_storage.return_value = MagicMock(
             save_images_from_s3=MagicMock(return_value=SavedImages(image_urls=[], thumbnail_urls=[]))
         )

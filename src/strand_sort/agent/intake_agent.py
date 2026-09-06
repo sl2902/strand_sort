@@ -134,8 +134,12 @@ def run_intake_workflow(image_sources: list[str], hooks: list | None = None) -> 
     settled (e.g. a hard failure before either tool call completed), in
     which case item is None.
     """
+    # "S3 keys" isn't accurate when storage_backend=local (image_sources are
+    # local temp file paths in that mode) — the prompt should match whatever
+    # scan_package_batch's own _get_image_bytes actually resolves.
+    source_kind = "S3 keys" if settings.storage_backend == "s3" else "local file paths"
     prompt = (
-        f"Process this incoming package's images for intake using these S3 keys: "
+        f"Process this incoming package's images for intake using these {source_kind}: "
         f"{image_sources}"
     )
     item_hook = ItemResultHook()
