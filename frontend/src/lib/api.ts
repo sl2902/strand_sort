@@ -42,6 +42,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// ---- App config ----
+
+interface AppConfig {
+  upload_mode: "local" | "presigned";
+}
+
+// Fetched once and cached for the page session — the backend's
+// storage_backend is the single source of truth for which upload flow to
+// use; duplicating that into a separate frontend env var would just be a
+// second source of truth that can drift out of sync (the same class of
+// bug as the earlier /api/v1 path mismatch).
+let appConfigPromise: Promise<AppConfig> | null = null;
+
+function getAppConfig(): Promise<AppConfig> {
+  if (!appConfigPromise) {
+    appConfigPromise = request<AppConfig>("/config");
+  }
+  return appConfigPromise;
+}
+
 // ---- Intake ----
 
 interface PresignedUpload {
@@ -53,13 +73,17 @@ interface PresignedUpload {
  * Uploads files directly to S3 via presigned PUT URLs, bypassing this API
  * (and Lambda's 6MB synchronous payload limit) for the actual file bytes.
  * Returns the resulting S3 keys, which /intake and /intake/video accept in
- * place of the file bytes themselves.
+ * place of the file bytes themselves. Only used when the backend's upload
+ * mode is "presigned" (storage_backend=s3) — see intakeImage/intakeVideo.
  */
-async function uploadToS3(items: { blob: File | Blob; filename: string }[]): Promise<string[]> {
+async function uploadToS3(
+  items: { blob: File | Blob; filename: string }[],
+  kind: "image" | "video"
+): Promise<string[]> {
   const presigned = await request<PresignedUpload[]>("/uploads/presign", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filenames: items.map((item) => item.filename) }),
+    body: JSON.stringify({ filenames: items.map((item) => item.filename), kind }),
   });
 
   await Promise.all(
@@ -76,11 +100,22 @@ async function uploadToS3(items: { blob: File | Blob; filename: string }[]): Pro
 }
 
 export async function intakeImage(files: File[] | Blob[], filenamePrefix = "photo"): Promise<IntakeResponse> {
+  const { upload_mode } = await getAppConfig();
+
+  if (upload_mode === "local") {
+    const form = new FormData();
+    files.forEach((file, i) => {
+      const name = file instanceof File ? file.name : `${filenamePrefix}-${i}.jpg`;
+      form.append("files", file, name);
+    });
+    return request<IntakeResponse>("/intake/local", { method: "POST", body: form });
+  }
+
   const items = files.map((file, i) => ({
     blob: file,
     filename: file instanceof File ? file.name : `${filenamePrefix}-${i}.jpg`,
   }));
-  const s3Keys = await uploadToS3(items);
+  const s3Keys = await uploadToS3(items, "image");
   return request<IntakeResponse>("/intake", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -89,7 +124,18 @@ export async function intakeImage(files: File[] | Blob[], filenamePrefix = "phot
 }
 
 export async function intakeVideo(file: File | Blob, filename = "clip.webm"): Promise<IntakeResponse> {
-  const [s3Key] = await uploadToS3([{ blob: file, filename: file instanceof File ? file.name : filename }]);
+  const { upload_mode } = await getAppConfig();
+
+  if (upload_mode === "local") {
+    const form = new FormData();
+    form.append("file", file, filename);
+    return request<IntakeResponse>("/intake/video/local", { method: "POST", body: form });
+  }
+
+  const [s3Key] = await uploadToS3(
+    [{ blob: file, filename: file instanceof File ? file.name : filename }],
+    "video"
+  );
   return request<IntakeResponse>("/intake/video", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
