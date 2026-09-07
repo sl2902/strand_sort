@@ -1,0 +1,43 @@
+{
+  "item_id": "demo-golden-eggs",
+  "product_name": "Fresh Eggs",
+  "category": "dairy_eggs",
+  "raw_date_text_found": "15-09-26",
+  "expiration_date": "2026-09-15",
+  "date_confidence": "high",
+  "is_expired": false,
+  "expiry_status": "near_expiry",
+  "is_damaged": false,
+  "requires_human_review": false,
+  "review_reason": null,
+  "dietary_flags": {
+    "is_vegetarian": false,
+    "is_vegetarian_source": "printed_symbol",
+    "is_low_sugar": true,
+    "is_low_sodium": false,
+    "is_low_sugar_source": "printed_panel",
+    "is_low_sodium_source": "printed_panel",
+    "is_gluten_free": true,
+    "is_vegan": false,
+    "other_flags_source": "inferred"
+  },
+  "nutrition_facts": {
+    "serving_size": "Per 100gm",
+    "raw_nutrition_text_found": "Protein (g) 13.3, Total Sugars (g) 0.67, Sodium (mg) 142",
+    "sugars_g": 0.67,
+    "sodium_mg": 142.0,
+    "protein_g": 13.3,
+    "nutrition_confidence": "high",
+    "panel_found": true,
+    "fssai_symbol_found": "red_triangle"
+  },
+  "quantity": 1,
+  "image_urls": [
+    "/demo/golden-eggs-0.jpg",
+    "/demo/golden-eggs-1.jpg"
+  ],
+  "thumbnail_urls": [
+    "/demo/golden-eggs-thumb-0.jpg",
+    "/demo/golden-eggs-thumb-1.jpg"
+  ]
+}

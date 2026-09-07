@@ -1,0 +1,43 @@
+{
+  "item_id": "demo-golden-atta",
+  "product_name": "10on10 Foods 100% Whole Wheat Atta",
+  "category": "grains_pulses",
+  "raw_date_text_found": "20/11/26",
+  "expiration_date": "2026-11-20",
+  "date_confidence": "high",
+  "is_expired": false,
+  "expiry_status": "fine",
+  "is_damaged": false,
+  "requires_human_review": false,
+  "review_reason": null,
+  "dietary_flags": {
+    "is_vegetarian": true,
+    "is_vegetarian_source": "printed_symbol",
+    "is_low_sugar": true,
+    "is_low_sodium": true,
+    "is_low_sugar_source": "printed_panel",
+    "is_low_sodium_source": "printed_panel",
+    "is_gluten_free": false,
+    "is_vegan": true,
+    "other_flags_source": "inferred"
+  },
+  "nutrition_facts": {
+    "serving_size": "100g",
+    "raw_nutrition_text_found": "Energy (Kcal) 373.17, Protein (g) 14.48, Carbohydrates (g) 73.39, Dietary fibre (g) 12.94, Total Sugar (g) <2, Added Sugar (g) <1, Total Fat (g) 2.41, Saturated fat (g) 0.6, Trans fat (g) <0.1, Cholesterol (mg) <1, Sodium (mg) 1.8",
+    "sugars_g": 2.0,
+    "sodium_mg": 1.8,
+    "protein_g": 14.48,
+    "nutrition_confidence": "high",
+    "panel_found": true,
+    "fssai_symbol_found": "green_dot"
+  },
+  "quantity": 3,
+  "image_urls": [
+    "/demo/golden-atta-0.jpg",
+    "/demo/golden-atta-1.jpg"
+  ],
+  "thumbnail_urls": [
+    "/demo/golden-atta-thumb-0.jpg",
+    "/demo/golden-atta-thumb-1.jpg"
+  ]
+}
