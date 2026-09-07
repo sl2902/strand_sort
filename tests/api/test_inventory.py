@@ -216,3 +216,66 @@ def test_delete_item_not_found(mock_get_repo, client):
     response = client.delete("/api/v1/inventory/nonexistent")
     assert response.status_code == 404
     mock_repo.delete_item.assert_not_called()
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_reject_item_success_when_expired(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {
+        "item_id": "abc",
+        "product_name": "Old Eggs",
+        "expiration_date": _iso(-5),
+    }
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/reject")
+    assert response.status_code == 200
+    assert response.json() == {"status": "rejected", "item_id": "abc"}
+    mock_repo.delete_item.assert_called_once_with("abc")
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_reject_item_rejects_when_not_expired(mock_get_repo, client):
+    """Gated server-side, not just hidden in the UI — a client can't reject
+    an item that isn't actually expired just by hitting this endpoint
+    directly."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {
+        "item_id": "abc",
+        "product_name": "Fresh Eggs",
+        "expiration_date": _iso(30),
+    }
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/reject")
+    assert response.status_code == 400
+    mock_repo.delete_item.assert_not_called()
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_reject_item_not_found(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = None
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/nonexistent/reject")
+    assert response.status_code == 404
+    mock_repo.delete_item.assert_not_called()
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_reject_item_hides_pending_review_items(mock_get_repo, client):
+    """Same visibility rule as get_item — an item still awaiting review
+    doesn't exist from Inventory's perspective yet, expired or not."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {
+        "item_id": "abc",
+        "product_name": "Flagged Milk",
+        "expiration_date": _iso(-5),
+        "requires_human_review": True,
+    }
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/reject")
+    assert response.status_code == 404
+    mock_repo.delete_item.assert_not_called()

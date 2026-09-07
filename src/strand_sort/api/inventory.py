@@ -84,3 +84,22 @@ def delete_item(item_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Item not found")
     repo.delete_item(item_id)
     return {"status": "deleted", "item_id": item_id}
+
+
+@router.post("/inventory/{item_id}/reject")
+def reject_item(item_id: str) -> dict[str, Any]:
+    """Explicit rejection of an expired item — the sanctioned path for
+    removing an item now that the Inventory UI no longer exposes a raw
+    delete action for staff. Gated here (not just in the UI) on
+    expiry_status recomputed fresh, same as every other read in this
+    file — only a genuinely expired item can be rejected this way, not
+    just any item a client happens to point this at."""
+    repo = get_inventory_repository()
+    existing = repo.get_by_id(item_id)
+    if not existing or existing.get("requires_human_review"):
+        raise HTTPException(status_code=404, detail="Item not found")
+    status = compute_expiry_status(existing.get("expiration_date"))
+    if status != ExpiryStatus.EXPIRED:
+        raise HTTPException(status_code=400, detail="Only expired items can be rejected.")
+    repo.delete_item(item_id)
+    return {"status": "rejected", "item_id": item_id}
