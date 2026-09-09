@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Pencil, Trash2, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
-import { getItem, updateItem, checkoutItem, deleteItem, ApiError } from "../lib/api";
+import { ArrowLeft, Pencil, X, Check, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
+import { getItem, updateItem, checkoutItem, rejectItem, ApiError } from "../lib/api";
 import { CATEGORY_LABELS, type DonationItem } from "../lib/types";
 import { Badge } from "../components/Badge";
 import { DietaryDetailList } from "../components/DietaryBadges";
@@ -43,8 +43,13 @@ export function InventoryItemPage() {
   const [saving, setSaving] = useState(false);
   const [checkoutQty, setCheckoutQty] = useState(1);
   const [checkingOut, setCheckingOut] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [confirmingReject, setConfirmingReject] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  // "Commit" has nothing to persist (no acknowledged-state field exists on
+  // DonationItem) — a pure local dismiss of the reject/commit prompt, not
+  // a change to the item. Resets on next load, which is fine: it's only
+  // clearing today's prompt, not recording a decision.
+  const [expiredDismissed, setExpiredDismissed] = useState(false);
 
   const load = () => {
     if (!itemId) return;
@@ -88,20 +93,20 @@ export function InventoryItemPage() {
     }
   };
 
-  const handleDelete = async () => {
+  const handleReject = async () => {
     if (!itemId) return;
-    setDeleting(true);
+    setRejecting(true);
     try {
-      await deleteItem(itemId);
-      show(`${item?.product_name ?? "Item"} deleted.`, "success");
+      await rejectItem(itemId);
+      show(`${item?.product_name ?? "Item"} rejected.`, "success");
       // The item no longer exists — nothing to stay on this page for, and
       // the Inventory list re-fetches on its own mount, so it won't show
-      // the deleted item stale.
+      // the rejected item stale.
       navigate("/inventory");
     } catch (err) {
-      show(err instanceof ApiError ? err.message : "Couldn't delete this item.", "error");
-      setDeleting(false);
-      setConfirmingDelete(false);
+      show(err instanceof ApiError ? err.message : "Couldn't reject this item.", "error");
+      setRejecting(false);
+      setConfirmingReject(false);
     }
   };
 
@@ -161,25 +166,46 @@ export function InventoryItemPage() {
               <Pencil size={15} />
               Edit
             </button>
-            <button
-              onClick={() => setConfirmingDelete(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-danger-400/50 bg-danger-100/60 px-4 py-2 text-sm font-medium text-danger-600 shadow-soft hover:bg-danger-100"
-            >
-              <Trash2 size={15} />
-              Delete
-            </button>
           </div>
         )}
       </div>
 
-      {confirmingDelete && (
+      {item.expiry_status === "expired" && !isEditing && !expiredDismissed && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 text-sm text-danger-700">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <p>
+              This item is expired ({formatDate(item.expiration_date)}). Reject to remove it from inventory, or
+              commit to keep it as-is.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setExpiredDismissed(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-cream-300 bg-cream-50 px-3 py-1.5 text-xs font-medium text-ink-800 shadow-soft hover:bg-cream-100"
+            >
+              <Check size={13} />
+              Commit
+            </button>
+            <button
+              onClick={() => setConfirmingReject(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-danger-400/50 bg-danger-100 px-3 py-1.5 text-xs font-medium text-danger-600 shadow-soft hover:bg-danger-200/60"
+            >
+              <X size={13} />
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmingReject && (
         <ConfirmDialog
-          title={`Delete ${item.product_name}?`}
-          description="This can't be undone — the item and its record will be permanently removed from inventory."
-          confirmLabel="Delete"
-          isConfirming={deleting}
-          onConfirm={handleDelete}
-          onCancel={() => setConfirmingDelete(false)}
+          title={`Reject ${item.product_name}?`}
+          description="This item is expired. Rejecting removes it from inventory — this can't be undone."
+          confirmLabel="Reject"
+          isConfirming={rejecting}
+          onConfirm={handleReject}
+          onCancel={() => setConfirmingReject(false)}
         />
       )}
 

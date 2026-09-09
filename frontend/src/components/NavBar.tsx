@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
-import { Camera, Boxes, ListChecks, AlarmClock } from "lucide-react";
+import { NavLink, Link } from "react-router-dom";
+import { Camera, Boxes, ListChecks, AlarmClock, X } from "lucide-react";
 import clsx from "clsx";
 
 function NavItem({
@@ -41,9 +41,17 @@ function NavItem({
 export function NavBar({
   pendingReviewCount,
   expiringCount,
+  demoMode = false,
 }: {
   pendingReviewCount: number;
   expiringCount: number;
+  /** True on /demo and its sub-routes — hides the real app's nav tabs
+   * (Scan/Inventory/Expiring/Review), showing only branding and a single
+   * "Exit demo" link instead. A stray click on a nav tab during a
+   * recording would otherwise navigate away from the demo mid-take, and
+   * showing full navigation implies "browse freely," which undercuts
+   * /demo being a guided, single-path walkthrough. */
+  demoMode?: boolean;
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-cream-300/70 bg-cream-100/85 backdrop-blur-md">
@@ -57,22 +65,32 @@ export function NavBar({
             <p className="hidden text-[11px] text-ink-700/70 sm:block">Donation intake &amp; sorting</p>
           </div>
         </div>
-        <nav className="flex items-center gap-1.5 sm:gap-2">
-          <NavItem to="/" icon={<Camera size={16} />} label="Scan" />
-          <NavItem to="/inventory" icon={<Boxes size={16} />} label="Inventory" />
-          <NavItem
-            to="/expiring"
-            icon={<AlarmClock size={16} />}
-            label="Expiring"
-            badge={expiringCount}
-          />
-          <NavItem
-            to="/review"
-            icon={<ListChecks size={16} />}
-            label="Review"
-            badge={pendingReviewCount}
-          />
-        </nav>
+        {demoMode ? (
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-ink-700/60 transition-colors hover:bg-cream-200/70 hover:text-ink-900"
+          >
+            <X size={14} />
+            Exit demo
+          </Link>
+        ) : (
+          <nav className="flex items-center gap-1.5 sm:gap-2">
+            <NavItem to="/" icon={<Camera size={16} />} label="Scan" />
+            <NavItem to="/inventory" icon={<Boxes size={16} />} label="Inventory" />
+            <NavItem
+              to="/expiring"
+              icon={<AlarmClock size={16} />}
+              label="Expiring"
+              badge={expiringCount}
+            />
+            <NavItem
+              to="/review"
+              icon={<ListChecks size={16} />}
+              label="Review"
+              badge={pendingReviewCount}
+            />
+          </nav>
+        )}
       </div>
     </header>
   );

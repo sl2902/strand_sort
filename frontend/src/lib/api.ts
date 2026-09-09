@@ -169,9 +169,16 @@ export function checkoutItem(itemId: string, quantity: number): Promise<Donation
   );
 }
 
-export function deleteItem(itemId: string): Promise<{ status: string; item_id: string }> {
-  return request<{ status: string; item_id: string }>(`/inventory/${encodeURIComponent(itemId)}`, {
-    method: "DELETE",
+/**
+ * Explicit rejection of an expired item — the sanctioned path for removing
+ * an item now that the Inventory UI no longer exposes a raw delete action.
+ * The backend gates this on expiry_status itself (recomputed fresh, not
+ * just hidden client-side), so this only succeeds for genuinely expired
+ * items.
+ */
+export function rejectItem(itemId: string): Promise<{ status: string; item_id: string }> {
+  return request<{ status: string; item_id: string }>(`/inventory/${encodeURIComponent(itemId)}/reject`, {
+    method: "POST",
   });
 }
 

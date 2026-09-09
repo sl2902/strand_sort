@@ -7,6 +7,7 @@ import { InventoryItemPage } from "./pages/InventoryItemPage";
 import { ReviewQueuePage } from "./pages/ReviewQueuePage";
 import { ExpiringSoonPage } from "./pages/ExpiringSoonPage";
 import { DemoPage } from "./pages/DemoPage";
+import { DemoItemPage } from "./pages/DemoItemPage";
 import { listPendingReviews, listInventory } from "./lib/api";
 
 export default function App() {
@@ -52,8 +53,9 @@ export default function App() {
     <div className="min-h-screen">
       {/* Same header for every route, /demo included — pendingCount/
           expiringCount simply stay at their initial 0 while isDemoRoute is
-          true, since the effect above never fires to change them. */}
-      <NavBar pendingReviewCount={pendingCount} expiringCount={expiringCount} />
+          true, since the effect above never fires to change them.
+          demoMode swaps the nav tabs for a single "Exit demo" link. */}
+      <NavBar pendingReviewCount={pendingCount} expiringCount={expiringCount} demoMode={isDemoRoute} />
       <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
         <Routes>
           <Route path="/" element={<ScanPage onScanComplete={refreshPendingCount} />} />
@@ -62,6 +64,7 @@ export default function App() {
           <Route path="/review" element={<ReviewQueuePage onQueueChange={refreshPendingCount} />} />
           <Route path="/expiring" element={<ExpiringSoonPage />} />
           <Route path="/demo" element={<DemoPage />} />
+          <Route path="/demo/item/:itemId" element={<DemoItemPage />} />
         </Routes>
       </main>
     </div>

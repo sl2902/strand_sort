@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { ImageOff, RefreshCw, Image as ImageIcon } from "lucide-react";
 import clsx from "clsx";
 import { resolveImageUrl } from "../lib/api";
@@ -26,10 +26,27 @@ function Thumb({
 }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const imgRef = useRef<HTMLImageElement>(null);
 
+  // The browser can have already fully loaded this exact URL before this
+  // <img> even mounts — e.g. the same thumbnail_urls[0] shown moments
+  // earlier as a compact card preview, now rendering again here. A cached
+  // image can finish loading synchronously with the <img> being created,
+  // so the onLoad/onError handlers below can end up attached AFTER the
+  // browser already fired (and will never fire again) — leaving isLoading
+  // stuck true forever (a permanent skeleton shimmer, not a broken-image
+  // fallback). Checking .complete right after mount/url-change catches
+  // that case; naturalWidth distinguishes an already-succeeded load from
+  // an already-failed one (both leave .complete true).
   useEffect(() => {
-    setHasError(false);
-    setIsLoading(true);
+    const img = imgRef.current;
+    if (img?.complete) {
+      setIsLoading(false);
+      setHasError(img.naturalWidth === 0);
+    } else {
+      setIsLoading(true);
+      setHasError(false);
+    }
   }, [url]);
 
   if (hasError) {
@@ -65,6 +82,7 @@ function Thumb({
     >
       {isLoading && <div className="skeleton absolute inset-0" />}
       <img
+        ref={imgRef}
         src={resolveImageUrl(url)}
         alt={alt}
         onClick={!isLoading ? onClick : undefined}
