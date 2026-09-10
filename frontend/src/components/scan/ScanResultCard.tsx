@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   Video,
   Trash2,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 import clsx from "clsx";
 import { Spinner } from "../Spinner";
@@ -75,7 +76,26 @@ function ToggleChevron({ expanded }: { expanded: boolean }) {
   );
 }
 
-export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDelete: () => void }) {
+export function ScanResultCard({
+  entry,
+  onDelete,
+  onImageRetry,
+}: {
+  entry: ScanLogEntry;
+  onDelete: () => void;
+  /** Re-resolves this entry's image_urls/thumbnail_urls fresh from the
+   * backend (GET /inventory/:id, falling back to the review queue for a
+   * still-pending item) and updates the persisted entry with the result.
+   * Undefined when there's no item_id to resolve against (e.g. a run that
+   * never reached a settled item) — the placeholder then has no Refresh
+   * affordance, matching there being nothing to refresh. Needed because
+   * entry.item.image_urls/thumbnail_urls are presigned S3 URLs, snapshotted
+   * at scan-completion time and persisted to localStorage — any such URL
+   * left to sit past its ~1hr expiry 403s on the next page load, same
+   * class of bug the Inventory/Review pages already solve by never
+   * persisting a presigned URL, only resolving fresh on every read. */
+  onImageRetry?: () => void;
+}) {
   // previewUrl starts as a URL.createObjectURL(...) blob reference, which only
   // survives the page session that created it — ScanPage swaps it for a real
   // server URL once the scan completes and item.image_urls is available, but
@@ -83,6 +103,13 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
   // swap happened) can still be dead blob refs. Fall back gracefully rather
   // than showing a broken <img>/<video> — there's nothing to retry against.
   const [previewFailed, setPreviewFailed] = useState(false);
+
+  // A successful onImageRetry swaps entry.previewUrl for a freshly-resolved
+  // one — reset the failed flag so the new URL gets a real chance to load
+  // instead of staying stuck on the placeholder from the old one.
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [entry.previewUrl]);
 
   // Set once, from whatever entry.status is at mount — deliberately NOT
   // recomputed on every render/status change. A card that's open because
@@ -178,9 +205,27 @@ export function ScanResultCard({ entry, onDelete }: { entry: ScanLogEntry; onDel
           />
         )
       ) : (
-        <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-cream-300 bg-cream-100 text-ink-700/50">
-          {entry.kind === "video" ? <Video size={18} /> : <ImageIcon size={18} />}
-          {previewFailed && <span className="text-[8px] leading-none">expired</span>}
+        <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-cream-300 bg-cream-100 px-1 text-center text-ink-700/50">
+          {entry.kind === "video" ? <Video size={16} /> : <ImageIcon size={16} />}
+          {previewFailed && (
+            <>
+              <span className="text-[8px] leading-none">expired</span>
+              {onImageRetry && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onImageRetry();
+                  }}
+                  className="flex items-center gap-0.5 text-[9px] font-medium text-terracotta-600 hover:text-terracotta-700"
+                >
+                  <RefreshCw size={9} />
+                  Refresh
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
 

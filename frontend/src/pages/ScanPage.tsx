@@ -5,7 +5,7 @@ import { PhotoScanPanel } from "../components/scan/PhotoScanPanel";
 import { VideoScanPanel } from "../components/scan/VideoScanPanel";
 import { ScanResultCard } from "../components/scan/ScanResultCard";
 import { ScanProgress } from "../components/Spinner";
-import { intakeImage, intakeVideo, resolveImageUrl, ApiError } from "../lib/api";
+import { intakeImage, intakeVideo, resolveImageUrl, getItem, listPendingReviews, ApiError } from "../lib/api";
 import type { IntakeResponse } from "../lib/types";
 import { useToast } from "../components/Toast";
 import { useScanLogStore } from "../lib/stores/scanLogStore";
@@ -86,6 +86,40 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
     setIsSubmitting(false);
   };
 
+  /**
+   * entry.item.image_urls/thumbnail_urls are presigned S3 URLs, snapshotted
+   * at scan-completion time and persisted to localStorage as part of the
+   * scan log — unlike Inventory/Review (which re-fetch fresh on every
+   * page load and never persist a presigned URL at all), a log entry can
+   * sit in localStorage well past a URL's ~1hr expiry. Rather than persist
+   * something longer-lived (there's no clean item-agnostic reference the
+   * frontend can turn into a URL itself — that always needs a backend
+   * round-trip), this re-resolves on demand: only called when a stored URL
+   * has actually failed to load (see ScanResultCard's Refresh button), and
+   * tries GET /inventory/:id first (committed items), falling back to the
+   * review queue for an item still pending. If neither has it anymore
+   * (rejected/deleted since scanning), there's nothing left to refresh to.
+   */
+  const handleImageRetry = async (entryId: string, itemId: string) => {
+    let fresh;
+    try {
+      fresh = await getItem(itemId);
+    } catch {
+      try {
+        const pending = await listPendingReviews();
+        fresh = pending.find((i) => i.item_id === itemId);
+      } catch {
+        fresh = undefined;
+      }
+    }
+    if (!fresh) return;
+    const previewRef = fresh.thumbnail_urls[0] ?? fresh.image_urls[0];
+    updateEntry(entryId, {
+      item: fresh,
+      ...(previewRef ? { previewUrl: resolveImageUrl(previewRef) } : {}),
+    });
+  };
+
   return (
     <div className="space-y-8">
       <div className="animate-fade-up">
@@ -142,7 +176,14 @@ export function ScanPage({ onScanComplete }: { onScanComplete: () => void }) {
           </div>
           <div className="max-h-[32rem] space-y-2.5 overflow-y-auto overflow-x-hidden pr-1">
             {log.map((entry) => (
-              <ScanResultCard key={entry.id} entry={entry} onDelete={() => deleteEntry(entry.id)} />
+              <ScanResultCard
+                key={entry.id}
+                entry={entry}
+                onDelete={() => deleteEntry(entry.id)}
+                onImageRetry={
+                  entry.item?.item_id ? () => handleImageRetry(entry.id, entry.item!.item_id) : undefined
+                }
+              />
             ))}
           </div>
         </div>
