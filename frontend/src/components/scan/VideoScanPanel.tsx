@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Camera, CameraOff, Circle, Square, RotateCcw, Upload, ScanLine, FileVideo } from "lucide-react";
 import clsx from "clsx";
 
-const MAX_RECORD_SECONDS = 8;
+const MAX_RECORD_SECONDS = 15;
 
 function pickSupportedMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;

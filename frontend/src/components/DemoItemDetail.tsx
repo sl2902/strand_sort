@@ -113,7 +113,7 @@ export function DemoItemDetail({ item }: { item: DonationItem }) {
         </Section>
 
         <Section title="Dietary flags">
-          <DietaryDetailList flags={dietary_flags} fssaiSymbol={nutrition_facts.fssai_symbol_found} />
+          <DietaryDetailList flags={dietary_flags} fssaiSymbol={nutrition_facts.fssai_symbol_found} category={item.category} />
         </Section>
 
         <Section title="Nutrition facts">

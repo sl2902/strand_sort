@@ -1,13 +1,29 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 import { Leaf, Sprout, WheatOff, Droplets, Candy, Beef } from "lucide-react";
-import type { DietaryFlags, FssaiSymbol } from "../lib/types";
+import type { Category, DietaryFlags, FssaiSymbol } from "../lib/types";
+import { isFoodCategory } from "../lib/types";
 import { Badge } from "./Badge";
 import { SourceDot } from "./SourceTag";
 import { FssaiMark } from "./FssaiMark";
 
-/** Compact at-a-glance row of dietary badges — used in list/card views. */
-export function DietaryBadgeRow({ flags, fssaiSymbol }: { flags: DietaryFlags; fssaiSymbol?: FssaiSymbol }) {
+/** Compact at-a-glance row of dietary badges — used in list/card views.
+ * Renders nothing at all for a non-food category (hygiene, other_unknown)
+ * — these concepts don't apply, and no badges is more honest than ones
+ * guessed from generic category knowledge (see the backend's
+ * is_food_category gate, mirrored here defensively for items scanned
+ * before that fix existed). */
+export function DietaryBadgeRow({
+  flags,
+  fssaiSymbol,
+  category,
+}: {
+  flags: DietaryFlags;
+  fssaiSymbol?: FssaiSymbol;
+  category: Category;
+}) {
+  if (!isFoodCategory(category)) return null;
+
   const badges: { key: string; node: ReactNode }[] = [];
 
   if (flags.is_vegetarian === true) {
@@ -84,8 +100,23 @@ export function DietaryBadgeRow({ flags, fssaiSymbol }: { flags: DietaryFlags; f
   );
 }
 
-/** Full dietary breakdown for the item detail view, each row tagged with its source. */
-export function DietaryDetailList({ flags, fssaiSymbol }: { flags: DietaryFlags; fssaiSymbol?: FssaiSymbol }) {
+/** Full dietary breakdown for the item detail view, each row tagged with its
+ * source. For a non-food category, the individual "Yes"/"No"/"Unavailable"
+ * rows would still read as specific claims about fields that don't
+ * conceptually apply — shows a single "Not applicable" line instead. */
+export function DietaryDetailList({
+  flags,
+  fssaiSymbol,
+  category,
+}: {
+  flags: DietaryFlags;
+  fssaiSymbol?: FssaiSymbol;
+  category: Category;
+}) {
+  if (!isFoodCategory(category)) {
+    return <p className="py-2 text-sm italic text-ink-700/50">Not applicable to this category.</p>;
+  }
+
   const rows: { label: string; value: string; source: string; positive: boolean; unavailable?: boolean }[] = [
     {
       label: "Vegetarian",

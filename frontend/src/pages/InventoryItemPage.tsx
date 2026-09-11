@@ -1,7 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Pencil, X, Check, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
-import { getItem, updateItem, checkoutItem, rejectItem, ApiError } from "../lib/api";
+import { ArrowLeft, Pencil, X, Check, Trash2, PackageMinus, AlertTriangle, CalendarClock, Info } from "lucide-react";
+import { getItem, updateItem, checkoutItem, rejectItem, deleteItem, ApiError } from "../lib/api";
+
+// Local dev convenience only — the real UI's sanctioned removal path is
+// Reject, gated server-side to expired items (see rejectItem). This
+// bypasses that gate entirely, so it must never be reachable from a
+// production build.
+const DEV_DELETE_ENABLED = import.meta.env.DEV;
 import { CATEGORY_LABELS, type DonationItem } from "../lib/types";
 import { Badge } from "../components/Badge";
 import { DietaryDetailList } from "../components/DietaryBadges";
@@ -45,6 +51,8 @@ export function InventoryItemPage() {
   const [checkingOut, setCheckingOut] = useState(false);
   const [confirmingReject, setConfirmingReject] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // "Commit" has nothing to persist (no acknowledged-state field exists on
   // DonationItem) — a pure local dismiss of the reject/commit prompt, not
   // a change to the item. Resets on next load, which is fine: it's only
@@ -110,6 +118,20 @@ export function InventoryItemPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!itemId) return;
+    setDeleting(true);
+    try {
+      await deleteItem(itemId);
+      show(`${item?.product_name ?? "Item"} deleted.`, "success");
+      navigate("/inventory");
+    } catch (err) {
+      show(err instanceof ApiError ? err.message : "Couldn't delete this item.", "error");
+      setDeleting(false);
+      setConfirmingDelete(false);
+    }
+  };
+
   if (loadError) {
     return (
       <div className="space-y-4">
@@ -166,9 +188,30 @@ export function InventoryItemPage() {
               <Pencil size={15} />
               Edit
             </button>
+            {DEV_DELETE_ENABLED && (
+              <button
+                onClick={() => setConfirmingDelete(true)}
+                title="Delete (dev only — bypasses the expired-only Reject gate)"
+                className="inline-flex items-center gap-2 rounded-xl border border-danger-400/50 bg-danger-100/60 px-4 py-2 text-sm font-medium text-danger-600 shadow-soft hover:bg-danger-100"
+              >
+                <Trash2 size={15} />
+                Delete (dev)
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title={`Delete ${item.product_name}? (dev only)`}
+          description="This bypasses the expired-only Reject gate — dev convenience, not available in production. This can't be undone."
+          confirmLabel="Delete"
+          isConfirming={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
 
       {item.expiry_status === "expired" && !isEditing && !expiredDismissed && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-danger-400/50 bg-danger-100/60 px-4 py-3.5 text-sm text-danger-700">
@@ -238,7 +281,7 @@ export function InventoryItemPage() {
           </Section>
 
           <Section title="Dietary flags">
-            <DietaryDetailList flags={dietary_flags} fssaiSymbol={nutrition_facts.fssai_symbol_found} />
+            <DietaryDetailList flags={dietary_flags} fssaiSymbol={nutrition_facts.fssai_symbol_found} category={item.category} />
           </Section>
 
           <Section title="Nutrition facts">

@@ -20,6 +20,19 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
+// Mirrors strand_sort.models.NON_FOOD_CATEGORIES/is_food_category — dietary
+// and nutrition concepts don't meaningfully apply to these categories, so
+// the backend never populates real dietary_flags/nutrition_facts for them
+// (see vision/extract.py's _to_donation_item). This is the same gate on
+// the frontend side, applied defensively: it also hides guessed badges on
+// any item scanned before that backend fix landed, without needing a data
+// migration.
+const NON_FOOD_CATEGORIES: ReadonlySet<Category> = new Set(["hygiene", "other_unknown"]);
+
+export function isFoodCategory(category: Category): boolean {
+  return !NON_FOOD_CATEGORIES.has(category);
+}
+
 export const CATEGORY_LABELS: Record<Category, string> = {
   canned_protein: "Canned Protein",
   grains_pasta: "Grains & Pasta",

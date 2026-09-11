@@ -126,6 +126,16 @@ export function ScanResultCard({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const hasPreview = !!entry.previewUrl && !previewFailed;
+  // entry.kind records what the user originally captured, not what
+  // entry.previewUrl currently points at — once a video scan completes,
+  // runScan swaps previewUrl for a server-resolved frame thumbnail (an
+  // IMAGE), but entry.kind stays "video" forever. Rendering that through
+  // a <video> tag always fails (browsers can't decode a JPEG as video),
+  // regardless of how fresh the URL is — which is why the Refresh button
+  // never actually fixed this: a fresh image URL through a <video> tag
+  // still fails the same way. Only a still-live blob: reference (the
+  // original recorded clip, before the scan resolves) is an actual video.
+  const isVideoPreview = entry.kind === "video" && !!entry.previewUrl?.startsWith("blob:");
 
   if (entry.status === "pending") {
     return (
@@ -179,7 +189,7 @@ export function ScanResultCard({
   return (
     <div className={clsx("relative flex gap-3 rounded-2xl border px-4 py-3.5 pr-9 shadow-soft", style.ring)}>
       {hasPreview ? (
-        entry.kind === "video" ? (
+        isVideoPreview ? (
           <video
             src={entry.previewUrl}
             muted
@@ -256,7 +266,7 @@ export function ScanResultCard({
               {item.requires_human_review && item.review_reason && (
                 <p className="text-xs text-saffron-700">{item.review_reason}</p>
               )}
-              <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} />
+              <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} category={item.category} />
             </div>
           ) : (
             <p className="mt-1 whitespace-pre-wrap text-sm leading-snug text-ink-800/90">{entry.summary}</p>

@@ -182,6 +182,19 @@ export function rejectItem(itemId: string): Promise<{ status: string; item_id: s
   });
 }
 
+/**
+ * Raw delete — the backend endpoint was never removed (only Reject, gated
+ * to expired items, is exposed in the real UI). Only wired up behind
+ * import.meta.env.DEV, as a local dev convenience for clearing out test
+ * data without waiting for something to expire — see InventoryItemCard/
+ * InventoryItemPage.
+ */
+export function deleteItem(itemId: string): Promise<{ status: string; item_id: string }> {
+  return request<{ status: string; item_id: string }>(`/inventory/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+  });
+}
+
 // ---- Review queue ----
 
 export function listPendingReviews(): Promise<DonationItem[]> {

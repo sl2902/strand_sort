@@ -1,15 +1,21 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { X, Check } from "lucide-react";
+import { X, Check, Trash2 } from "lucide-react";
 import { Badge } from "./Badge";
 import { DietaryBadgeRow } from "./DietaryBadges";
 import { ImageThumbnail } from "./ItemImages";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Spinner } from "./Spinner";
 import { expiryBadgeContent } from "../lib/format";
-import { rejectItem, ApiError } from "../lib/api";
+import { rejectItem, deleteItem, ApiError } from "../lib/api";
 import { useToast } from "./Toast";
 import type { DonationItem } from "../lib/types";
+
+// Local dev convenience only — the real UI's sanctioned removal path is
+// Reject, gated server-side to expired items (see rejectItem). This
+// bypasses that gate entirely, so it must never be reachable from a
+// production build.
+const DEV_DELETE_ENABLED = import.meta.env.DEV;
 
 /** Shared item card — Inventory list (grouped or sorted) and Expiring Soon. */
 export function InventoryItemCard({
@@ -43,10 +49,13 @@ export function InventoryItemCard({
   // a change to the item itself. Resets on next fetch/remount, which is
   // fine: it's just clearing today's prompt, not recording a decision.
   const [kept, setKept] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { show } = useToast();
 
   const resolvedLinkTo = linkTo === undefined ? `/inventory/${item.item_id}` : linkTo;
   const showExpiredActions = item.expiry_status === "expired" && !readOnly && !kept;
+  const showDevDelete = DEV_DELETE_ENABLED && !readOnly;
 
   const handleReject = async () => {
     setRejecting(true);
@@ -59,6 +68,20 @@ export function InventoryItemCard({
       show(err instanceof ApiError ? err.message : "Couldn't reject this item.", "error");
     } finally {
       setRejecting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteItem(item.item_id);
+      show(`${item.product_name} deleted.`, "success");
+      setConfirmingDelete(false);
+      onReject?.();
+    } catch (err) {
+      show(err instanceof ApiError ? err.message : "Couldn't delete this item.", "error");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -84,35 +107,53 @@ export function InventoryItemCard({
           <Badge tone={expiryBadge.tone}>{expiryBadge.label}</Badge>
           {item.requires_human_review && <Badge tone="danger">Needs review</Badge>}
         </div>
-        <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} />
+        <DietaryBadgeRow flags={item.dietary_flags} fssaiSymbol={item.nutrition_facts.fssai_symbol_found} category={item.category} />
       </div>
 
-      {showExpiredActions && (
+      {(showExpiredActions || showDevDelete) && (
         <div className="absolute right-2 top-2 flex items-center gap-1">
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setKept(true);
-            }}
-            aria-label={`Keep ${item.product_name} despite expiry`}
-            title="Keep — dismiss this prompt"
-            className="rounded-full p-1.5 text-ink-700/40 transition-colors hover:bg-success-100 hover:text-success-600"
-          >
-            <Check size={13} />
-          </button>
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setConfirmingReject(true);
-            }}
-            aria-label={`Reject ${item.product_name}`}
-            title="Reject — remove from inventory"
-            className="rounded-full p-1.5 text-ink-700/40 transition-colors hover:bg-danger-100 hover:text-danger-600"
-          >
-            {rejecting ? <Spinner size={13} /> : <X size={13} />}
-          </button>
+          {showExpiredActions && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setKept(true);
+                }}
+                aria-label={`Keep ${item.product_name} despite expiry`}
+                title="Keep — dismiss this prompt"
+                className="rounded-full p-1.5 text-ink-700/40 transition-colors hover:bg-success-100 hover:text-success-600"
+              >
+                <Check size={13} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setConfirmingReject(true);
+                }}
+                aria-label={`Reject ${item.product_name}`}
+                title="Reject — remove from inventory"
+                className="rounded-full p-1.5 text-ink-700/40 transition-colors hover:bg-danger-100 hover:text-danger-600"
+              >
+                {rejecting ? <Spinner size={13} /> : <X size={13} />}
+              </button>
+            </>
+          )}
+          {showDevDelete && (
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setConfirmingDelete(true);
+              }}
+              aria-label={`Delete ${item.product_name} (dev only)`}
+              title="Delete (dev only — bypasses the expired-only Reject gate)"
+              className="rounded-full p-1.5 text-ink-700/40 transition-colors hover:bg-danger-100 hover:text-danger-600"
+            >
+              {deleting ? <Spinner size={13} /> : <Trash2 size={13} />}
+            </button>
+          )}
         </div>
       )}
 
@@ -124,6 +165,17 @@ export function InventoryItemCard({
           isConfirming={rejecting}
           onConfirm={handleReject}
           onCancel={() => setConfirmingReject(false)}
+        />
+      )}
+
+      {confirmingDelete && showDevDelete && (
+        <ConfirmDialog
+          title={`Delete ${item.product_name}? (dev only)`}
+          description="This bypasses the expired-only Reject gate — dev convenience, not available in production. This can't be undone."
+          confirmLabel="Delete"
+          isConfirming={deleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
         />
       )}
     </>
