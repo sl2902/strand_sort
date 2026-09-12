@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     gcp_secrets_manager_secret_id: str = "strand-sort/gcp-service-account"
 
     # Deployed frontend origin (for CORS)
-    frontend_origin: str = ""
+    frontend_origin: str = "https://strand-sort.vercel.app"
 
     model_config = SettingsConfigDict(
         env_file=".env",
