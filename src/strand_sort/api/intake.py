@@ -41,6 +41,12 @@ def _with_resolved_images(item: dict[str, Any] | None) -> dict[str, Any] | None:
 async def _run_workflow_with_rollback(image_sources: list[str]) -> dict[str, Any]:
     """Shared by every intake route (photo/video, local/S3) — same
     rollback/error handling regardless of where image_sources came from."""
+    # Confirms concretely how many images actually make it into the
+    # extraction call, rather than inferring it from the UI — for video
+    # intake specifically, this is what's left after extract_frames'
+    # sampling, so this number should be >1 for a multi-angle pan (see its
+    # own "sampled N/max_frames" log line for the sampling step itself).
+    logger.info(f"Running intake workflow with {len(image_sources)} image source(s): {image_sources}")
     rollback_hook = InventoryRollbackHook()
     try:
         # run_intake_workflow is synchronous and blocks on a live Bedrock/Gemini

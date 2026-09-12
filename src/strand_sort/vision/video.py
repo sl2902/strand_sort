@@ -60,45 +60,36 @@ def extract_frames(video_path: str, max_frames: int = 4) -> list[bytes]:
         raise ValueError(f"Could not open video file: {video_path}")
 
     try:
-        # CAP_PROP_FRAME_COUNT is only a hint for many codecs (esp. browser-recorded
-        # webm/mp4), so we do a single sequential read pass rather than seeking —
-        # random-access seeks are unreliable across containers/codecs.
-        reported_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        windows = _even_windows(reported_total, max_frames) if reported_total > 0 else None
-
-        best_by_window: list[tuple[float, np.ndarray | None]] = (
-            [(-1.0, None)] * len(windows) if windows else []
-        )
-        buffered_frames: list[np.ndarray] = []  # used only when frame count is unknown upfront
-
-        frame_idx = 0
+        # CAP_PROP_FRAME_COUNT is only a hint, and for many codecs — esp.
+        # browser-recorded webm/mp4, which is exactly what this app receives
+        # from VideoScanPanel's MediaRecorder — it can be wildly too small
+        # (observed: reporting 1-2 when the real clip has dozens of frames).
+        # An earlier version of this function trusted that hint to
+        # pre-compute sampling windows before reading, which meant a bad
+        # hint silently collapsed sampling down to just the video's first
+        # fraction of a second — every window ended up covering the same
+        # handful of early frames, no matter how long the actual pan was or
+        # how many distinct angles it covered. Always read every real frame
+        # first, then compute windows over the true count — the cost is
+        # buffering a short donation-scan clip in memory, not re-seeking.
+        frames: list[np.ndarray] = []
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
+            frames.append(frame)
 
-            if windows is not None:
-                window_i = _window_for_index(frame_idx, windows)
-                if window_i is not None:
-                    score = _blur_score(frame)
-                    if score > best_by_window[window_i][0]:
-                        best_by_window[window_i] = (score, frame)
-            else:
-                buffered_frames.append(frame)
+        if not frames:
+            raise ValueError(f"No frames found in video: {video_path}")
 
-            frame_idx += 1
-
-        if windows is None:
-            if not buffered_frames:
-                raise ValueError(f"No frames found in video: {video_path}")
-            windows = _even_windows(len(buffered_frames), max_frames)
-            best_by_window = [(-1.0, None)] * len(windows)
-            for i, frame in enumerate(buffered_frames):
-                window_i = _window_for_index(i, windows)
-                if window_i is not None:
-                    score = _blur_score(frame)
-                    if score > best_by_window[window_i][0]:
-                        best_by_window[window_i] = (score, frame)
+        windows = _even_windows(len(frames), max_frames)
+        best_by_window: list[tuple[float, np.ndarray | None]] = [(-1.0, None)] * len(windows)
+        for i, frame in enumerate(frames):
+            window_i = _window_for_index(i, windows)
+            if window_i is not None:
+                score = _blur_score(frame)
+                if score > best_by_window[window_i][0]:
+                    best_by_window[window_i] = (score, frame)
 
         sampled_frames = [frame for _, frame in best_by_window if frame is not None]
         if not sampled_frames:
@@ -106,7 +97,7 @@ def extract_frames(video_path: str, max_frames: int = 4) -> list[bytes]:
 
         logger.info(
             f"extract_frames: sampled {len(sampled_frames)}/{max_frames} frames "
-            f"from {frame_idx} total frames in {video_path}"
+            f"from {len(frames)} total frames in {video_path}"
         )
         return [_encode_jpeg(frame) for frame in sampled_frames]
     finally:

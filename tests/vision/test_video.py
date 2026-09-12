@@ -63,3 +63,46 @@ def test_extract_frames_max_frames_capped_by_video_length(tmp_path):
     _make_video(video_path, num_frames=2)
     frames = extract_frames(video_path, max_frames=4)
     assert 1 <= len(frames) <= 2
+
+
+_real_video_capture = cv2.VideoCapture  # captured before any monkeypatching below
+
+
+class _LyingFrameCountCapture:
+    """Wraps a real cv2.VideoCapture but misreports CAP_PROP_FRAME_COUNT —
+    simulates what browser-recorded webm/mp4 does in production (the bug
+    this class exists to catch): the hint underclaims the real frame count
+    by a wide margin, everything else behaves normally."""
+
+    def __init__(self, path: str, lie_as: int):
+        self._real = _real_video_capture(path)  # not cv2.VideoCapture — that's the patched name
+        self._lie_as = lie_as
+
+    def isOpened(self):
+        return self._real.isOpened()
+
+    def get(self, prop_id):
+        if prop_id == cv2.CAP_PROP_FRAME_COUNT:
+            return self._lie_as
+        return self._real.get(prop_id)
+
+    def read(self):
+        return self._real.read()
+
+    def release(self):
+        self._real.release()
+
+
+def test_extract_frames_survives_unreliable_frame_count_hint(sample_video, monkeypatch):
+    """The reported bug: only one distinct angle was ever captured despite
+    filming a multi-angle pan. CAP_PROP_FRAME_COUNT reporting far fewer
+    frames than actually exist (observed for browser-recorded webm/mp4)
+    used to collapse every sampling window down to the video's first
+    fraction of a second. 20 real frames, hint lies and says there's only
+    1 — sampling must still span the whole clip, not just frame 0-1."""
+    monkeypatch.setattr(
+        "strand_sort.vision.video.cv2.VideoCapture",
+        lambda path: _LyingFrameCountCapture(path, lie_as=1),
+    )
+    frames = extract_frames(sample_video, max_frames=4)
+    assert len(frames) == 4

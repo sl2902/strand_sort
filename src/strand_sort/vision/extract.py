@@ -21,6 +21,7 @@ from strand_sort.models import (
     VisionExtraction,
     DietaryFlags,
     NutritionFacts,
+    is_food_category,
 )
 
 SYSTEM_PROMPT = """
@@ -65,6 +66,12 @@ INDIAN PACKAGING & DOT-MATRIX RULES:
 6. If you cannot identify an expiration date, return null for expiration_date_raw and raw_date_text_found.
 7. Always transcribe the exact text string found near the date header into raw_date_text_found (e.g., '23/01/2027' or 'USE BY 30/08/26') BEFORE parsing it into ISO format for expiration_date_raw.
 8. NUTRITION & DIETARY EXTRACTION RULES:
+   - NON-FOOD ITEMS: If category is "hygiene" or "other_unknown" (soap, toothpaste, detergent,
+     and anything else that isn't actually food or drink), do NOT populate dietary_flags or
+     nutrition_facts at all — leave every field at its default/null value. Do not guess
+     vegetarian/vegan/gluten-free/low-sugar/low-sodium from general product knowledge for
+     these items; "probably vegan" reasoning about toothpaste is not a real dietary claim.
+     Only apply the rules below to genuine food/beverage/consumable items.
    - Use both visible package labels AND inherent nutritional facts of single-ingredient whole foods:
     * is_low_sugar: True if total sugars <= 5g per 100g or explicitly labeled "Low Sugar" / "Zero Sugar". (True for raw eggs, butter, plain milk, pure grains).
     * is_low_sodium: True if sodium <= 140mg per serving or explicitly labeled "Low Sodium". (True for fresh eggs (~70mg/egg), unsalted butter, milk, and whole grains).
@@ -187,6 +194,18 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
     if low_sodium is not None:
         dietary_flags.is_low_sodium, dietary_flags.is_low_sodium_source = low_sodium
 
+    nutrition_facts = result.nutrition_facts
+    if not is_food_category(result.category):
+        # Reliability net over the SYSTEM_PROMPT instruction above — don't
+        # trust the model to always follow it (it doesn't always). Whatever
+        # it returned for a non-food item, guessed or not, gets discarded
+        # here; only genuine food/beverage categories keep their extracted
+        # dietary_flags/nutrition_facts. Overrides the recompute above too,
+        # since there's no real sugar/sodium reading to trust for a
+        # hygiene product either.
+        dietary_flags = DietaryFlags()
+        nutrition_facts = NutritionFacts()
+
     return DonationItem(
         item_id=generate_idempotency_key(result.product_name, result.expiration_date_raw or ""),
         product_name=result.product_name,
@@ -204,7 +223,7 @@ def _to_donation_item(result: VisionExtraction) -> DonationItem:
         requires_human_review=requires_review,
         review_reason=reason,
         dietary_flags=dietary_flags,
-        nutrition_facts=result.nutrition_facts,
+        nutrition_facts=nutrition_facts,
     )
 
 

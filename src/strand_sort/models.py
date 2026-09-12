@@ -37,6 +37,22 @@ class Category(str, Enum):
     SNACKS_CONFECTIONERY = "snacks_confectionery"
     OTHER_UNKNOWN = "other_unknown"         # doesn't match any category
 
+
+# Categories dietary/nutrition concepts don't meaningfully apply to — a
+# hygiene product being "vegan" or "gluten-free" isn't a food-safety claim
+# the model has any real basis to make, whether from a printed panel or
+# from generic category knowledge. OTHER_UNKNOWN is included because it's
+# not confirmed to be food either; the safe default for an uncertain
+# category is to withhold the claim, not guess it. Used both to instruct
+# the extraction prompt and (more reliably) to zero out whatever the model
+# returned anyway — see _to_donation_item in vision/extract.py.
+NON_FOOD_CATEGORIES = frozenset({Category.HYGIENE, Category.OTHER_UNKNOWN})
+
+
+def is_food_category(category: Category) -> bool:
+    return category not in NON_FOOD_CATEGORIES
+
+
 class DietaryFlags(BaseModel):
     is_vegetarian: bool | None = None
     is_vegetarian_source: Literal["printed_symbol", "inferred", "not_found"] = "not_found"

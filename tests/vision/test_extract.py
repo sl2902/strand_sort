@@ -179,6 +179,72 @@ class TestToDonationItemOverridesModelAssertion:
         assert item.dietary_flags.is_low_sodium_source == "inferred"
 
 
+class TestNonFoodCategoryStripsDietaryAndNutrition:
+    """The reported bug: a Patanjali toothpaste (category=hygiene) came back
+    with Veg/Vegan/Gluten-Free badges — all guessed from generic category
+    knowledge, not anything actually printed on the package. Dietary/
+    nutrition concepts don't meaningfully apply to non-food items, so these
+    fields must come out fully default regardless of what the model
+    returned — enforced in code, not just requested in the prompt."""
+
+    def test_hygiene_item_strips_model_guessed_dietary_flags(self):
+        result = _vision_extraction(
+            product_name="Patanjali Toothpaste",
+            category="hygiene",
+            dietary_flags=DietaryFlags(
+                is_vegetarian=True,
+                is_vegetarian_source="inferred",
+                is_vegan=True,
+                is_gluten_free=True,
+                other_flags_source="inferred",
+            ),
+        )
+        item = _to_donation_item(result)
+
+        assert item.dietary_flags == DietaryFlags()
+
+    def test_hygiene_item_strips_nutrition_facts_even_with_a_panel(self):
+        result = _vision_extraction(
+            category="hygiene",
+            nutrition_facts=_nutrition_facts(panel_found=True, sugars_g=1.0, sodium_mg=1.0),
+        )
+        item = _to_donation_item(result)
+
+        assert item.nutrition_facts == NutritionFacts()
+
+    def test_other_unknown_category_also_stripped(self):
+        """Unconfirmed-food is treated the same as known-non-food — the
+        safe default for an uncertain category is to withhold the claim,
+        not guess it."""
+        result = _vision_extraction(
+            category="other_unknown",
+            dietary_flags=DietaryFlags(is_vegan=True, is_gluten_free=True),
+        )
+        item = _to_donation_item(result)
+
+        assert item.dietary_flags == DietaryFlags()
+
+    def test_food_category_keeps_dietary_flags_unchanged(self):
+        """Regression guard: this fix must be scoped to non-food categories
+        only — a real food item's dietary flags must pass through exactly
+        as before (same fixture shape as the eggs/banana tests above, just
+        asserting the fields survive at all)."""
+        result = _vision_extraction(
+            category="dairy_eggs",
+            dietary_flags=DietaryFlags(
+                is_vegetarian=False,
+                is_vegetarian_source="printed_symbol",
+                is_gluten_free=True,
+                other_flags_source="inferred",
+            ),
+        )
+        item = _to_donation_item(result)
+
+        assert item.dietary_flags.is_vegetarian is False
+        assert item.dietary_flags.is_vegetarian_source == "printed_symbol"
+        assert item.dietary_flags.is_gluten_free is True
+
+
 class TestNoDateSentinelDoesNotCrash:
     """DonationItem.raw_date_text_found is a required str, but the model's
     own sentinel for "no date visible" is the literal string "NONE" — not
