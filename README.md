@@ -55,6 +55,39 @@ all without typing a single field by hand during intake.
 
 ---
 
+## For Judges — Quick Start
+
+There are two ways to see StrandSort in action, depending on how much
+time you have:
+
+### Fastest: the built-in narrated demo (`/demo`)
+
+Visit **`https://strand-sort.vercel.app/demo`** and press play. This is a guided,
+AI-narrated walkthrough (Gemini TTS) covering the problem, the pipeline,
+and real example results — served entirely from static fixtures, with
+**zero live backend calls**.
+
+### Full experience: the live app
+
+Visit **[StrandSort](https://strand-sort.vercel.app)** and try a real intake:
+
+1. Go to the intake screen and either take a photo/short video of a
+   single donated item, or upload one with different angles of the item.
+2. Watch the agent extract the product name, expiry date, dietary marks,
+   and nutrition values, each with its own confidence.
+3. Confident, clean reads land directly in **Inventory**. Anything
+   uncertain shows up in the **Review** queue, with the original photo
+   next to the reason it was flagged.
+4. Check the **Expiring** tab to see items nearing their expiry date,
+   computed live rather than fixed at scan time.
+5. Try **checkout** on an inventory item to see stock decrement, down to
+   a disabled out-of-stock state at zero.
+
+No AWS or GCP account is required to use either path — both are public,
+hosted experiences.
+
+---
+
 ## Architecture
 
 ```
@@ -176,15 +209,88 @@ list). By default, the backend runs against local SQLite storage and
 local disk for images (`storage_backend=local`, `db_engine=sqlite`) —
 no AWS account required for local development.
 
+---
+
 ## Deployment
 
 The backend ships as a container image to AWS Lambda, exposed via a
-Lambda Function URL. See `Dockerfile` for the build, and set
-`storage_backend=s3` / `db_engine=dynamodb` plus the relevant AWS/GCP
-environment variables for a real deployment.
+Lambda Function URL. Set `storage_backend=s3` / `db_engine=dynamodb`
+plus the relevant AWS/GCP environment variables for a real deployment.
+See `Dockerfile` for the build definition.
+
+### 1. Log in to AWS
+
+If your organization uses AWS IAM Identity Center (SSO):
+
+```bash
+aws sso login --profile <your-profile-name>
+```
+
+If you're using long-lived access keys instead:
+
+```bash
+aws configure
+```
+
+Verify you're authenticated as the right identity before continuing:
+
+```bash
+aws sts get-caller-identity
+```
+
+### 2. Authenticate Docker to your ECR registry
+
+```bash
+aws ecr get-login-password --region <your-region> \
+  | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
+```
+
+### 3. Build and push the container image
+
+```bash
+docker build -t strand-sort .
+
+docker tag strand-sort:latest \
+  <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest
+
+docker push <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest
+```
+
+### 4. Update the Lambda function to use the new image
+
+```bash
+aws lambda update-function-code \
+  --function-name <your-function-name> \
+  --image-uri <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest \
+  --region <your-region>
+```
+
+### 5. (Optional) Invoke the function directly to test
+
+```bash
+aws lambda invoke \
+  --function-name <your-function-name> \
+  --region <your-region> \
+  --payload '{}' \
+  response.json
+
+cat response.json
+```
+
+### 6. (Optional) Tail logs for a live invocation
+
+```bash
+aws logs tail /aws/lambda/<your-function-name> --follow --region <your-region>
+```
+
+Replace every `<your-...>` placeholder above with your actual AWS
+account ID, region, function name, and ECR repository name.
 
 ---
 
 ## License
 
-Licensed under the [MIT License](./LICENSE).
+This repository is public and licensed under the [MIT License](./LICENSE).
+An open-source license file must be present at the repository root for
+hackathon submission requirements — GitHub's automatic license detection
+reads it from there and surfaces it in the repo's "About" section.
