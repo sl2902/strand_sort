@@ -1,0 +1,43 @@
+{
+  "item_id": "demo-golden-flagged-item",
+  "product_name": "Magnum Pistachio Ice Cream",
+  "category": "snacks_confectionery",
+  "raw_date_text_found": "NONE",
+  "expiration_date": "no-date",
+  "date_confidence": "low",
+  "is_expired": false,
+  "expiry_status": null,
+  "is_damaged": false,
+  "requires_human_review": true,
+  "review_reason": "low-confidence date read (unverified: None)",
+  "dietary_flags": {
+    "is_vegetarian": true,
+    "is_vegetarian_source": "printed_symbol",
+    "is_low_sugar": false,
+    "is_low_sodium": null,
+    "is_low_sugar_source": "printed_panel",
+    "is_low_sodium_source": "unavailable",
+    "is_gluten_free": false,
+    "is_vegan": false,
+    "other_flags_source": "inferred"
+  },
+  "nutrition_facts": {
+    "serving_size": "61 g",
+    "raw_nutrition_text_found": "Protein (g) 3.3, Carbohydrate (g) 19, Total Sugars (g) 16.6, Added Sugars (g) 12.8, Total Fat (g) 12.9, Saturated Fat (g) 7.2, Trans Fat (g) 0.23, Cholesterol (mg) 14.7",
+    "sugars_g": 16.6,
+    "sodium_mg": null,
+    "protein_g": 3.3,
+    "nutrition_confidence": "high",
+    "panel_found": true,
+    "fssai_symbol_found": "green_dot"
+  },
+  "quantity": 1,
+  "image_urls": [
+    "/demo/golden-flagged-item-0.jpg",
+    "/demo/golden-flagged-item-1.jpg"
+  ],
+  "thumbnail_urls": [
+    "/demo/golden-flagged-item-thumb-0.jpg",
+    "/demo/golden-flagged-item-thumb-1.jpg"
+  ]
+}

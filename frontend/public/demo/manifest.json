@@ -1,6 +1,7 @@
 {
   "fixtures": [
     "golden-eggs",
-    "golden-atta"
+    "golden-atta",
+    "golden-flagged-item"
   ]
 }
