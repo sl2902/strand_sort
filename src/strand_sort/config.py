@@ -57,10 +57,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Auto-detect Cloud Run environment if storage_backend not explicitly overridden
-if not os.environ.get("STORAGE_BACKEND") and os.environ.get("K_SERVICE"):
-    settings.storage_backend = "gcs"
-
 BEDROCK_FALLBACK_ERROR_CODES: tuple[str, ...] = (
     "AccessDeniedException",
     "ModelNotAllowedException",
