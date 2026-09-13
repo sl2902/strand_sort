@@ -1,4 +1,5 @@
 import shutil
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import NamedTuple
@@ -8,6 +9,30 @@ from loguru import logger
 from strand_sort.config import settings
 from strand_sort.storage.pending_uploads import get_bytes as get_pending_upload_bytes
 from strand_sort.vision.thumbnail import generate_thumbnail
+
+PRESIGNED_URL_EXPIRY_SECONDS = 86400  # 24h — long enough that regeneration is rare
+
+# Regenerate a cached URL once less than this much validity remains, rather
+# than waiting until the last second — avoids handing out a URL that's
+# about to expire mid-page-load.
+PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS = 3600
+
+# Module-level, not an S3ImageStorage instance attribute: get_image_storage()
+# constructs a fresh instance on every call (see below), so an instance
+# attribute would never actually accumulate reuse across requests. Keyed by
+# (bucket, key) rather than just key, in case more than one bucket is ever
+# in play in the same process. Survives across warm Lambda invocations of
+# the same container (real benefit for back-to-back requests hitting it),
+# but is lost on a cold start — an accepted tradeoff for this optimization,
+# not a bug; the cache-miss path below regenerates and self-heals fine.
+_presigned_url_cache: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def clear_presigned_url_cache() -> None:
+    """Test-only reset — the cache is module-level and outlives any single
+    S3ImageStorage instance, which also means it outlives any single test
+    unless explicitly cleared between them."""
+    _presigned_url_cache.clear()
 
 # image_storage.py -> storage/ -> strand_sort/ -> src/ -> repo root. Anchored
 # to where this file lives on disk, not the process's cwd — a plain relative
@@ -133,7 +158,7 @@ class S3ImageStorage(ImageStorage):
         self,
         bucket_name: str | None = None,
         region: str | None = None,
-        url_expiry_seconds: int = 3600,
+        url_expiry_seconds: int = PRESIGNED_URL_EXPIRY_SECONDS,
     ):
         self.bucket_name = bucket_name or settings.s3_bucket_name
         self.url_expiry_seconds = url_expiry_seconds
@@ -159,14 +184,31 @@ class S3ImageStorage(ImageStorage):
         return SavedImages(image_urls=keys, thumbnail_urls=thumbnail_keys)
 
     def resolve_urls(self, refs: list[str]) -> list[str]:
-        return [
-            self.s3.generate_presigned_url(
+        """Turns stored object keys into presigned GET URLs — reusing a
+        cached URL for the same (bucket, key) as long as it still has more
+        than PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS of validity left.
+        Generating a fresh signature on every call (the old behavior)
+        produced a different URL string each time even for the exact same
+        file, which defeated browser caching entirely — the browser caches
+        by exact URL, so it never recognized two signatures of the same
+        object as the same resource."""
+        now = time.time()
+        urls = []
+        for key in refs:
+            cache_key = (self.bucket_name, key)
+            cached = _presigned_url_cache.get(cache_key)
+            if cached is not None and cached[1] - now > PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS:
+                urls.append(cached[0])
+                continue
+
+            url = self.s3.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": self.bucket_name, "Key": key},
                 ExpiresIn=self.url_expiry_seconds,
             )
-            for key in refs
-        ]
+            _presigned_url_cache[cache_key] = (url, now + self.url_expiry_seconds)
+            urls.append(url)
+        return urls
 
     def save_images_from_s3(self, item_id: str, pending_keys: list[str]) -> SavedImages:
         """Server-side copy from pending-uploads/ to this item's real image

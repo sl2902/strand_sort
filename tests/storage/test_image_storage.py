@@ -7,13 +7,28 @@ from moto import mock_aws
 from PIL import Image
 
 from strand_sort.storage.image_storage import (
+    PRESIGNED_URL_EXPIRY_SECONDS,
+    PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS,
     LocalImageStorage,
     S3ImageStorage,
     check_local_image_integrity,
+    clear_presigned_url_cache,
     get_image_storage,
     resolve_image_urls,
     resolve_local_storage_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_presigned_url_cache():
+    """The cache is module-level by design (see image_storage.py) so it
+    survives across S3ImageStorage instances within one process — which
+    also means it'd survive across tests and could leak a URL generated
+    under one test's moto-mocked bucket into another test reusing the same
+    (bucket, key) pair. Reset on both sides of every test."""
+    clear_presigned_url_cache()
+    yield
+    clear_presigned_url_cache()
 
 
 def _real_jpeg_bytes(size: tuple[int, int] = (800, 600)) -> bytes:
@@ -274,6 +289,105 @@ class TestS3ImageStorage:
     def test_resolve_urls_empty_list(self):
         storage = S3ImageStorage(bucket_name="whatever", region="us-east-1")
         assert storage.resolve_urls([]) == []
+
+    @mock_aws
+    def test_resolve_urls_reuses_cached_url_within_validity_window(self):
+        """The actual point of this ticket: a browser caches by exact URL
+        string, so two signatures of the same file — even a moment apart —
+        are invisible to it as the same resource. Back-to-back reads must
+        return the identical string, not just an equally-valid one."""
+        bucket = "test-foodbank-images"
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="item-1/0.jpg", Body=b"data")
+
+        storage = S3ImageStorage(bucket_name=bucket, region="us-east-1")
+        first = storage.resolve_urls(["item-1/0.jpg"])
+        second = storage.resolve_urls(["item-1/0.jpg"])
+
+        assert first == second
+
+    @mock_aws
+    def test_resolve_urls_reuses_cache_across_separate_instances(self):
+        """get_image_storage() constructs a fresh S3ImageStorage on every
+        call — the cache has to be module-level to give any real reuse
+        across requests, not an instance attribute that dies with the
+        instance that created it."""
+        bucket = "test-foodbank-images"
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="item-1/0.jpg", Body=b"data")
+
+        first = S3ImageStorage(bucket_name=bucket, region="us-east-1").resolve_urls(["item-1/0.jpg"])
+        second = S3ImageStorage(bucket_name=bucket, region="us-east-1").resolve_urls(["item-1/0.jpg"])
+
+        assert first == second
+
+    @mock_aws
+    def test_resolve_urls_regenerates_once_cached_entry_is_near_expiry(self, monkeypatch):
+        """A cached URL isn't reused forever — once it's within
+        PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS of actually expiring, a
+        fresh one must be generated instead (the self-healing path).
+        Asserts on call count via a spy rather than comparing URL strings:
+        boto3 signs against its own internal clock (unaffected by
+        patching this module's time.time), so two calls made an instant
+        apart in real wall-clock time can legitimately produce an
+        identical signature even though the cache correctly decided to
+        regenerate."""
+        import time as time_module
+        from unittest.mock import patch
+
+        import strand_sort.storage.image_storage as image_storage_module
+
+        bucket = "test-foodbank-images"
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=bucket)
+        s3.put_object(Bucket=bucket, Key="item-1/0.jpg", Body=b"data")
+
+        storage = S3ImageStorage(bucket_name=bucket, region="us-east-1")
+
+        with patch.object(storage.s3, "generate_presigned_url", wraps=storage.s3.generate_presigned_url) as spy:
+            storage.resolve_urls(["item-1/0.jpg"])
+            assert spy.call_count == 1
+
+            storage.resolve_urls(["item-1/0.jpg"])  # within the window — cache hit
+            assert spy.call_count == 1
+
+            # Replace the module's `time` name binding (not the global
+            # stdlib module) so only this module's now = time.time() call
+            # is affected — a targeted fake rather than patching stdlib
+            # time globally. The cached entry expires PRESIGNED_URL_EXPIRY_
+            # SECONDS (24h) after it was created, so the clock has to jump
+            # to within REFRESH_THRESHOLD of THAT, not just THRESHOLD
+            # seconds forward from now.
+            real_now = time_module.time()
+            fake_now = real_now + PRESIGNED_URL_EXPIRY_SECONDS - PRESIGNED_URL_REFRESH_THRESHOLD_SECONDS + 1
+
+            class _FakeTime:
+                def time(self):
+                    return fake_now
+
+            monkeypatch.setattr(image_storage_module, "time", _FakeTime())
+            storage.resolve_urls(["item-1/0.jpg"])  # near-expiry — cache miss
+            assert spy.call_count == 2
+
+    @mock_aws
+    def test_resolve_urls_cache_keyed_by_bucket_not_just_key(self):
+        """Same object key in two different buckets must not share a cache
+        entry — resolving one must never hand back a URL signed for the
+        other bucket's object."""
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="bucket-a")
+        s3.create_bucket(Bucket="bucket-b")
+        s3.put_object(Bucket="bucket-a", Key="item-1/0.jpg", Body=b"data")
+        s3.put_object(Bucket="bucket-b", Key="item-1/0.jpg", Body=b"data")
+
+        url_a = S3ImageStorage(bucket_name="bucket-a", region="us-east-1").resolve_urls(["item-1/0.jpg"])[0]
+        url_b = S3ImageStorage(bucket_name="bucket-b", region="us-east-1").resolve_urls(["item-1/0.jpg"])[0]
+
+        assert url_a != url_b
+        assert "bucket-a" in url_a
+        assert "bucket-b" in url_b
 
 
 class TestGetImageStorage:
