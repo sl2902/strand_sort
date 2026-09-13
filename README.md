@@ -90,30 +90,7 @@ hosted experiences.
 
 ## Architecture
 
-```
-┌─────────────┐      ┌──────────────────────────────┐      ┌────────────────┐
-│  React/Vite  │ ───▶ │   AWS Lambda (container)      │ ───▶ │   Amazon S3     │
-│  Frontend    │      │   FastAPI + Mangum             │      │  (donation      │
-│              │ ◀─── │                                │      │   images)       │
-└─────────────┘      │  ┌──────────────────────────┐  │      └────────────────┘
-                      │  │ Strands Agent            │  │
-                      │  │  - scan_package_batch    │  │      ┌────────────────┐
-                      │  │  - commit_to_inventory   │  │ ───▶ │   DynamoDB      │
-                      │  │  - rollback hook         │  │      │  (inventory,    │
-                      │  │  - result-capture hook   │  │      │   review queue) │
-                      │  └──────────────────────────┘  │      └────────────────┘
-                      └───────────────┬────────────────┘
-                                      │
-                     ┌────────────────┴─────────────────┐
-                     ▼                                   ▼
-          ┌───────────────────┐              ┌───────────────────────┐
-          │  Amazon Bedrock    │  fallback   │  Gemini (Vertex AI)     │
-          │  (Amazon Nova)     │ ──────────▶ │  credentials via AWS    │
-          │  primary vision    │             │  Secrets Manager on     │
-          │  + agent reasoning │             │  Lambda, local ADC in   │
-          └───────────────────┘             │  dev                     │
-                                             └───────────────────────┘
-```
+![strand_sort_architecture](/assets/strandsort_architecture_v2.png)
 
 **Direct-to-S3 uploads**: the browser uploads images/video frames
 straight to S3 via presigned URLs, so intake requests to Lambda stay
@@ -211,81 +188,295 @@ no AWS account required for local development.
 
 ---
 
-## Deployment
-
-The backend ships as a container image to AWS Lambda, exposed via a
-Lambda Function URL. Set `storage_backend=s3` / `db_engine=dynamodb`
-plus the relevant AWS/GCP environment variables for a real deployment.
-See `Dockerfile` for the build definition.
-
+## AWS Setup — Provisioning Resources From Scratch
+ 
+The commands below create every AWS resource this project needs. If
+you're deploying against an existing setup, skip to **AWS Deployment**
+further down instead.
+ 
+**Region note**: the commands below use `ap-south-1` to match how the
+DynamoDB table and S3 bucket were actually created for this project —
+adjust if you're provisioning elsewhere, but keep it consistent across
+every command and every Lambda environment variable.
+ 
+### 1. Create the DynamoDB table
+ 
+```bash
+aws dynamodb create-table \
+  --table-name strand-sort-inventory \
+  --attribute-definitions \
+    AttributeName=item_id,AttributeType=S \
+    AttributeName=product_name,AttributeType=S \
+    AttributeName=idempotency_key,AttributeType=S \
+  --key-schema AttributeName=item_id,KeyType=HASH \
+  --global-secondary-indexes \
+    '[
+      {
+        "IndexName": "ProductNameIndex",
+        "KeySchema": [{"AttributeName": "product_name", "KeyType": "HASH"}],
+        "Projection": {"ProjectionType": "ALL"}
+      },
+      {
+        "IndexName": "IdempotencyKeyIndex",
+        "KeySchema": [{"AttributeName": "idempotency_key", "KeyType": "HASH"}],
+        "Projection": {"ProjectionType": "ALL"}
+      }
+    ]' \
+  --billing-mode PAY_PER_REQUEST \
+  --region ap-south-1
+```
+ 
+### 2. Create the S3 bucket and set CORS for direct browser uploads
+ 
+```bash
+aws s3api create-bucket \
+  --bucket strand-sort-images \
+  --region ap-south-1 \
+  --create-bucket-configuration LocationConstraint=ap-south-1
+ 
+aws s3api put-bucket-cors \
+  --bucket strand-sort-images \
+  --cors-configuration '{
+    "CORSRules": [
+      {
+        "AllowedOrigins": ["http://localhost:5173", "https://strand-sort.vercel.app"],
+        "AllowedMethods": ["PUT"],
+        "AllowedHeaders": ["*"],
+        "MaxAgeSeconds": 3000
+      }
+    ]
+  }'
+```
+ 
+Update `AllowedOrigins` if your local dev port or deployed frontend URL
+differs.
+ 
+### 3. Store the GCP service account credentials in Secrets Manager
+ 
+Needed because Lambda has no local ADC (Application Default Credentials)
+file — this is what `gcp_auth.py`'s `get_gcp_credentials()` reads on cold
+start.
+ 
+```bash
+aws secretsmanager create-secret \
+  --name strand-sort/gcp-service-account \
+  --secret-string file://path/to/your-gcp-service-account.json \
+  --region ap-south-1
+```
+ 
+The secret name here matches `gcp_secrets_manager_secret_id`'s default in
+`config.py` — if you use a different name, set that env var to match.
+ 
+### 4. Create the IAM role and permissions policy for Lambda
+ 
+```bash
+cat > trust-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+ 
+aws iam create-role \
+  --role-name strand-sort-lambda-role \
+  --assume-role-policy-document file://trust-policy.json
+ 
+cat > permissions-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-south-1:<your-account-id>:table/strand-sort-inventory",
+        "arn:aws:dynamodb:ap-south-1:<your-account-id>:table/strand-sort-inventory/index/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::strand-sort-images/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:ap-south-1:<your-account-id>:secret:strand-sort/gcp-service-account-*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:ap-south-1:<your-account-id>:*"
+    }
+  ]
+}
+EOF
+ 
+aws iam put-role-policy \
+  --role-name strand-sort-lambda-role \
+  --policy-name strand-sort-lambda-permissions \
+  --policy-document file://permissions-policy.json
+```
+ 
+Replace `<your-account-id>` with your actual AWS account ID
+(`aws sts get-caller-identity` shows it).
+ 
+### 5. Create the ECR repository
+ 
+```bash
+aws ecr create-repository \
+  --repository-name strand-sort \
+  --region ap-south-1
+```
+ 
+### 6. Build, push, and create the Lambda function
+ 
+Follow **steps 1–3 of AWS Deployment** below to authenticate Docker and
+push your first image, then create the function (rather than update an
+existing one):
+ 
+```bash
+aws lambda create-function \
+  --function-name strand-sort \
+  --package-type Image \
+  --code ImageUri=<your-account-id>.dkr.ecr.ap-south-1.amazonaws.com/strand-sort:latest \
+  --role arn:aws:iam::<your-account-id>:role/strand-sort-lambda-role \
+  --timeout 60 \
+  --memory-size 1024 \
+  --region ap-south-1 \
+  --environment "Variables={
+    AWS_REGION=ap-south-1,
+    DB_ENGINE=dynamodb,
+    DYNAMODB_TABLE_NAME=strand-sort-inventory,
+    STORAGE_BACKEND=s3,
+    S3_BUCKET_NAME=strand-sort-images,
+    GCP_PROJECT_ID=<your-gcp-project-id>,
+    GEMINI_LOCATION=<your-gemini-location>,
+    GCP_SECRETS_MANAGER_SECRET_ID=strand-sort/gcp-service-account
+  }"
+```
+ 
+`GCP_PROJECT_ID` and `GEMINI_LOCATION` are required with no code default
+— the function will fail at cold start without them.
+ 
+### 7. Expose it via a Lambda Function URL
+ 
+```bash
+aws lambda create-function-url-config \
+  --function-name strand-sort \
+  --auth-type NONE \
+  --region ap-south-1
+ 
+aws lambda add-permission \
+  --function-name strand-sort \
+  --statement-id FunctionURLAllowPublicAccess \
+  --action lambda:InvokeFunctionUrl \
+  --principal "*" \
+  --function-url-auth-type NONE \
+  --region ap-south-1
+```
+ 
+`--auth-type NONE` makes this publicly invokable, matching a public demo
+app with no login required — tighten this if that's not appropriate for
+your deployment.
+ 
+---
+ 
+## AWS Deployment
+ 
+Use this section once the resources above already exist, to ship a code
+update to the running Lambda function.
+ 
 ### 1. Log in to AWS
-
+ 
 If your organization uses AWS IAM Identity Center (SSO):
-
+ 
 ```bash
 aws sso login --profile <your-profile-name>
 ```
-
+ 
 If you're using long-lived access keys instead:
-
+ 
 ```bash
 aws configure
 ```
-
+ 
 Verify you're authenticated as the right identity before continuing:
-
+ 
 ```bash
 aws sts get-caller-identity
 ```
-
+ 
 ### 2. Authenticate Docker to your ECR registry
-
+ 
 ```bash
 aws ecr get-login-password --region <your-region> \
   | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
 ```
-
+ 
 ### 3. Build and push the container image
-
+ 
 ```bash
 docker build -t strand-sort .
-
+ 
 docker tag strand-sort:latest \
   <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest
-
+ 
 docker push <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest
 ```
-
+ 
 ### 4. Update the Lambda function to use the new image
-
+ 
 ```bash
 aws lambda update-function-code \
   --function-name <your-function-name> \
   --image-uri <your-account-id>.dkr.ecr.<your-region>.amazonaws.com/strand-sort:latest \
   --region <your-region>
 ```
-
+ 
 ### 5. (Optional) Invoke the function directly to test
-
+ 
 ```bash
 aws lambda invoke \
   --function-name <your-function-name> \
   --region <your-region> \
   --payload '{}' \
   response.json
-
+ 
 cat response.json
 ```
-
+ 
 ### 6. (Optional) Tail logs for a live invocation
-
+ 
 ```bash
 aws logs tail /aws/lambda/<your-function-name> --follow --region <your-region>
 ```
-
+ 
 Replace every `<your-...>` placeholder above with your actual AWS
 account ID, region, function name, and ECR repository name.
-
+ 
 ---
 
 ## License
