@@ -1,9 +1,16 @@
-from datetime import date, timedelta
+from datetime import timedelta
 from unittest.mock import patch, MagicMock
+
+from strand_sort.expiry import today_ist
 
 
 def _iso(days_from_today: int) -> str:
-    return (date.today() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
+    # today_ist(), not date.today() — must match what compute_expiry_status
+    # itself anchors to, or these tests go flaky near the IST/UTC day
+    # boundary on a non-IST machine (e.g. a UTC CI runner). See
+    # tests/test_expiry.py's TestTodayIstAnchoring for the actual bug this
+    # guards against.
+    return (today_ist() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
 
 
 @patch("strand_sort.api.inventory.get_inventory_repository")
@@ -156,6 +163,7 @@ def test_checkout_rejects_zero_or_negative_quantity(mock_get_repo, client):
 @patch("strand_sort.api.inventory.get_inventory_repository")
 def test_checkout_success(mock_get_repo, client):
     mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "expiration_date": _iso(30)}
     mock_repo.decrement_quantity.return_value = {"item_id": "abc", "quantity": 1}
     mock_get_repo.return_value = mock_repo
 
@@ -167,11 +175,71 @@ def test_checkout_success(mock_get_repo, client):
 @patch("strand_sort.api.inventory.get_inventory_repository")
 def test_checkout_insufficient_stock_returns_400(mock_get_repo, client):
     mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "expiration_date": _iso(30)}
     mock_repo.decrement_quantity.side_effect = ValueError("Insufficient stock!")
     mock_get_repo.return_value = mock_repo
 
     response = client.post("/api/v1/inventory/abc/checkout?quantity=99")
     assert response.status_code == 400
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_checkout_not_found_returns_404(mock_get_repo, client):
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = None
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/nonexistent/checkout?quantity=1")
+    assert response.status_code == 404
+    mock_repo.decrement_quantity.assert_not_called()
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_checkout_blocked_for_expired_item(mock_get_repo, client):
+    """The reported gap: staff could distribute an expired item through
+    the app with no warning or block anywhere. How an expired item
+    actually gets disposed of is out of scope — the app just shouldn't
+    offer distributing it at all."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "expiration_date": _iso(-1)}
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/checkout?quantity=1")
+    assert response.status_code == 400
+    mock_repo.decrement_quantity.assert_not_called()
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_checkout_allowed_for_near_expiry_item(mock_get_repo, client):
+    """Only actually-expired items are blocked — near_expiry is still a
+    legitimate, distributable state (that's the whole point of surfacing
+    it early on the Expiring Soon page)."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {"item_id": "abc", "expiration_date": _iso(3)}
+    mock_repo.decrement_quantity.return_value = {"item_id": "abc", "quantity": 1}
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/checkout?quantity=1")
+    assert response.status_code == 200
+    mock_repo.decrement_quantity.assert_called_once_with("abc", 1)
+
+
+@patch("strand_sort.api.inventory.get_inventory_repository")
+def test_checkout_blocked_uses_freshly_computed_expiry_not_a_stored_value(mock_get_repo, client):
+    """Same "never trust a stored value" rule as everywhere else in this
+    file — a stale stored is_expired=False must not let checkout through
+    for an item whose date has since actually passed."""
+    mock_repo = MagicMock()
+    mock_repo.get_by_id.return_value = {
+        "item_id": "abc",
+        "expiration_date": _iso(-5),
+        "is_expired": False,  # stale, wrong by the time this is read
+    }
+    mock_get_repo.return_value = mock_repo
+
+    response = client.post("/api/v1/inventory/abc/checkout?quantity=1")
+    assert response.status_code == 400
+    mock_repo.decrement_quantity.assert_not_called()
 
 
 @patch("strand_sort.api.inventory.get_inventory_repository")

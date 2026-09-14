@@ -1,10 +1,16 @@
-from datetime import date, timedelta
+from datetime import timedelta
+from zoneinfo import ZoneInfo
 
-from strand_sort.expiry import ExpiryStatus, compute_expiry_status, NEAR_EXPIRY_THRESHOLD_DAYS
+from strand_sort.expiry import ExpiryStatus, compute_expiry_status, today_ist, NEAR_EXPIRY_THRESHOLD_DAYS
 
 
 def _iso(days_from_today: int) -> str:
-    return (date.today() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
+    # today_ist(), not date.today() — these tests must stay correct
+    # regardless of the machine/CI runner's own ambient timezone (e.g. a
+    # UTC-based CI box), same reason production code doesn't use
+    # date.today() either. See TestTodayIstAnchoring below for the actual
+    # UTC-vs-IST regression this guards against.
+    return (today_ist() + timedelta(days=days_from_today)).strftime("%Y-%m-%d")
 
 
 class TestComputeExpiryStatus:
@@ -47,3 +53,33 @@ class TestComputeExpiryStatus:
         # Simulate "time passing" by checking the same stored string against
         # a date threshold further out than when it was first computed.
         assert compute_expiry_status(_iso(-1)) == ExpiryStatus.EXPIRED
+
+
+class TestTodayIstAnchoring:
+    """The real bug, confirmed live against production: a milk item with
+    expiration_date=2026-09-13 was still showing near_expiry at 05:17 IST
+    on the 14th, because the deployed Lambda has no TZ env var and computed
+    "today" as 2026-09-13 (still UTC's date at that instant, since IST is
+    5:30 ahead and UTC hadn't rolled over to the 14th yet). Confirmed to
+    self-correct once UTC crossed midnight — this test locks in the actual
+    fix (anchor to IST explicitly) rather than depending on that
+    coincidence of timing."""
+
+    def test_expiry_uses_ist_date_not_servers_utc_date(self, monkeypatch):
+        from datetime import datetime as real_datetime
+
+        class _FixedDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                # 2026-09-13 23:47 UTC == 2026-09-14 05:17 IST — the exact
+                # instant this bug was caught live.
+                fixed_utc = real_datetime(2026, 9, 13, 23, 47, tzinfo=ZoneInfo("UTC"))
+                return fixed_utc.astimezone(tz) if tz else fixed_utc.replace(tzinfo=None)
+
+        monkeypatch.setattr("strand_sort.expiry.datetime", _FixedDatetime)
+
+        # A UTC-anchored "today" would still be the 13th, making this item
+        # (expiring "today" in UTC terms) merely near_expiry.
+        assert compute_expiry_status("2026-09-13") == ExpiryStatus.EXPIRED
+        # And an item expiring "today" in the correct, IST sense:
+        assert compute_expiry_status("2026-09-14") == ExpiryStatus.NEAR_EXPIRY

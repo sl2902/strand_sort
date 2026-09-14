@@ -49,11 +49,23 @@ def get_item(item_id: str) -> dict[str, Any]:
 
 @router.post("/inventory/{item_id}/checkout")
 def checkout_item(item_id: str, quantity: int = 1) -> dict[str, Any]:
-    """Decrement stock when items are distributed."""
+    """Decrement stock when items are distributed. Blocked for expired
+    items — the app shouldn't offer distributing something past its
+    expiry at all; how an expired item actually gets disposed of is out
+    of scope here, handled outside the system. Gated here (not just in
+    the UI), same as reject_item's expiry gate, and on expiry_status
+    recomputed fresh rather than any stored value — "is this expired"
+    changes daily even though the stored date doesn't."""
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be greater than zero.")
 
     repo = get_inventory_repository()
+    existing = repo.get_by_id(item_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if compute_expiry_status(existing.get("expiration_date")) == ExpiryStatus.EXPIRED:
+        raise HTTPException(status_code=400, detail="This item is expired and can't be distributed.")
+
     try:
         return repo.decrement_quantity(item_id, quantity)
     except ValueError as e:
