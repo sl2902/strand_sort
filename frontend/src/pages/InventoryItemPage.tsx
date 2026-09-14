@@ -323,12 +323,19 @@ export function InventoryItemPage() {
                 max={item.quantity}
                 value={checkoutQty}
                 onChange={(e) => setCheckoutQty(Number(e.target.value))}
-                disabled={item.quantity === 0}
+                disabled={item.quantity === 0 || item.expiry_status === "expired"}
                 className="w-24 rounded-lg border border-cream-300 bg-cream-100 px-3 py-2 text-sm focus:border-terracotta-400 focus:outline-none focus:ring-2 focus:ring-terracotta-300/40 disabled:cursor-not-allowed disabled:opacity-50"
               />
               <button
                 onClick={handleCheckout}
-                disabled={checkingOut || item.quantity === 0 || checkoutQty <= 0 || checkoutQty > item.quantity}
+                disabled={
+                  checkingOut ||
+                  item.quantity === 0 ||
+                  checkoutQty <= 0 ||
+                  checkoutQty > item.quantity ||
+                  item.expiry_status === "expired"
+                }
+                title={item.expiry_status === "expired" ? "This item is expired and can't be distributed" : undefined}
                 className="inline-flex items-center gap-2 rounded-xl bg-terracotta-500 px-4 py-2 text-sm font-semibold text-cream-50 shadow-soft hover:bg-terracotta-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {checkingOut ? <Spinner size={15} /> : <PackageMinus size={15} />}
@@ -337,11 +344,13 @@ export function InventoryItemPage() {
             </div>
             <p className="mt-3 flex items-start gap-1.5 text-xs text-ink-700/60">
               <Info size={13} className="mt-0.5 shrink-0" />
-              {item.quantity === 0
-                ? "Out of stock — nothing left to distribute."
-                : `Decrements stock when items are handed out to distribution. ${item.quantity} unit${
-                    item.quantity === 1 ? "" : "s"
-                  } currently on hand.`}
+              {item.expiry_status === "expired"
+                ? "This item is expired and can't be distributed — reject it above, or correct the date via Edit if it was misread."
+                : item.quantity === 0
+                  ? "Out of stock — nothing left to distribute."
+                  : `Decrements stock when items are handed out to distribution. ${item.quantity} unit${
+                      item.quantity === 1 ? "" : "s"
+                    } currently on hand.`}
             </p>
           </Section>
 
